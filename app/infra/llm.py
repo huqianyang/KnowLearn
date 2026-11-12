@@ -1,4 +1,4 @@
-"""硅基流动（OpenAI 兼容）：视觉模型图片摘要；M4 将在此加入对话生成。
+"""硅基流动（OpenAI 兼容）：视觉模型图片摘要、对话生成（含流式）。
 
 模型 ID 经技术验证 S1 确认：对话 deepseek-ai/DeepSeek-V4-Flash，视觉 deepseek-ai/DeepSeek-V4.1-Flash。
 """
@@ -43,3 +43,26 @@ class LlmClient:
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)
         raise RuntimeError(f"视觉模型调用失败（已重试 {retries} 次）：{last}")
+
+    # ---------------- 对话（M4） ----------------
+    # 问答链路不重试，保证速度（技术方案第 6 章）
+
+    def complete(self, messages: list[dict], max_tokens: int = 800, temperature: float = 0.2,
+                 json_mode: bool = False) -> str:
+        kwargs: dict = {}
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        r = self.client.chat.completions.create(model=self.llm_model, messages=messages, max_tokens=max_tokens,
+                                                temperature=temperature, **kwargs)
+        return (r.choices[0].message.content or "").strip()
+
+    def stream(self, messages: list[dict], max_tokens: int = 2000, temperature: float = 0.3):
+        """逐段产出文本。调用方可随时停止迭代（流式中断）。"""
+        resp = self.client.chat.completions.create(model=self.llm_model, messages=messages, max_tokens=max_tokens,
+                                                   temperature=temperature, stream=True)
+        try:
+            for ev in resp:
+                if ev.choices and (delta := ev.choices[0].delta.content):
+                    yield delta
+        finally:
+            resp.close()

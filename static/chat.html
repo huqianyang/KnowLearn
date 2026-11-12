@@ -1,8 +1,415 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><title>智能问答 · KnowLearn</title></head>
-<body style="font-family:sans-serif;padding:40px;color:#555">
-  <h2>KnowLearn 智能问答</h2>
-  <p>问答页面将在里程碑 M4 实现。当前可访问 <a href="/api/v1/health">/api/v1/health</a> 查看服务状态。</p>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智能问答 · KnowLearn</title>
+<link rel="stylesheet" href="/css/app.css">
+<style>
+  body { display: flex; flex-direction: column; height: 100vh; }
+  .layout { flex: 1; display: grid; grid-template-columns: 260px 1fr; min-height: 0; }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } .side { display: none; } }
+
+  .side { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .side .new { margin: 14px; }
+  .sessions { flex: 1; overflow: auto; padding: 0 8px 8px; }
+  .sess { display: flex; align-items: center; gap: 6px; padding: 9px 10px; border-radius: 8px; cursor: pointer; }
+  .sess:hover { background: #f3f5f8; }
+  .sess.on { background: var(--primary-soft); }
+  .sess .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess .time { font-size: 11px; color: var(--muted); }
+  .sess .del { visibility: hidden; }
+  .sess:hover .del { visibility: visible; }
+  .group { font-size: 12px; color: var(--muted); padding: 10px 10px 4px; }
+  body.busy .sess, body.busy .new { cursor: not-allowed; opacity: .6; }
+
+  .main { display: flex; flex-direction: column; min-height: 0; position: relative; }
+  .msgs { flex: 1; overflow: auto; padding: 24px 0; }
+  .inner { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+  .msg { margin-bottom: 22px; display: flex; gap: 12px; }
+  .msg.user { justify-content: flex-end; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--primary); color: #fff; font-size: 13px; font-weight: 600; }
+  .msg.user .bubble { background: var(--primary); color: #fff; padding: 10px 14px; border-radius: 12px 12px 2px 12px; max-width: 70%; white-space: pre-wrap; word-break: break-word; }
+  .msg.bot .bubble { flex: 1; min-width: 0; }
+  .answer { background: var(--panel); border: 1px solid var(--line); border-radius: 2px 12px 12px 12px; padding: 4px 16px; overflow-x: auto; }
+  .answer:empty { display: none; }
+  .answer table { border-collapse: collapse; margin: 8px 0; }
+  .answer td, .answer th { border: 1px solid var(--line); padding: 5px 8px; font-size: 13px; text-align: left; vertical-align: top; }
+  .answer th { background: #fafbfc; }
+  .answer pre { background: #f6f8fa; padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+  .answer code { font-family: Consolas, "Courier New", monospace; font-size: 13px; }
+  .answer :not(pre) > code { background: #f1f3f6; padding: 1px 4px; border-radius: 4px; }
+  .cite { display: inline-block; min-width: 18px; text-align: center; font-size: 11px; line-height: 16px; border-radius: 4px; background: var(--primary-soft); color: var(--primary); margin: 0 1px; cursor: pointer; vertical-align: 2px; font-style: normal; }
+  .cite.w { background: var(--web-soft); color: var(--web); }
+  .caret { display: inline-block; width: 7px; height: 15px; background: var(--primary); vertical-align: -2px; animation: blink 1s infinite; margin-left: 2px; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .ended { color: var(--muted); font-size: 12px; margin: 8px 0; }
+
+  .progress { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12px; }
+  .progress .p { padding: 2px 10px; border-radius: 999px; background: #eef1f5; color: var(--muted); }
+  .progress .p.doing { background: var(--primary-soft); color: var(--primary); }
+  .progress .p.done { background: var(--ok-soft); color: var(--ok); }
+  .degrade { font-size: 12px; color: var(--warn); background: var(--warn-soft); border-radius: 6px; padding: 4px 10px; margin-bottom: 8px; display: inline-block; }
+  .fail { background: var(--err-soft); color: var(--err); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+
+  .srcs { margin-top: 10px; }
+  .srcs-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .src-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; }
+  .src { border: 1px solid var(--line); border-left: 3px solid var(--primary); border-radius: 8px; padding: 8px 10px; background: var(--panel); font-size: 12px; min-width: 0; }
+  .src.web { border-left-color: var(--web); }
+  .src.hl { box-shadow: 0 0 0 2px var(--primary); }
+  .src.web.hl { box-shadow: 0 0 0 2px var(--web); }
+  .src .h { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
+  .src .n { font-weight: 700; color: var(--primary); }
+  .src.web .n { color: var(--web); }
+  .src .main-line { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .src .kv { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .src .snip { margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .imgs { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .img { width: 200px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); font-size: 12px; cursor: pointer; }
+  .img img { width: 100%; height: 120px; object-fit: contain; background: #f6f8fa; display: block; }
+  .img .broken { height: 120px; display: grid; place-items: center; color: var(--muted); background: #f6f8fa; }
+  .img .cap { padding: 6px 8px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .ops { margin-top: 6px; display: flex; gap: 4px; }
+
+  .welcome { text-align: center; padding-top: 8vh; }
+  .welcome h1 { font-size: 22px; margin: 0 0 6px; }
+  .examples { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 640px; margin: 24px auto 0; text-align: left; }
+  .ex { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 12px 14px; cursor: pointer; }
+  .ex:hover { border-color: var(--primary); }
+  .ex b { display: block; margin-bottom: 4px; }
+  .ex span { color: var(--muted); font-size: 13px; }
+
+  .to-bottom { position: absolute; right: 24px; bottom: 120px; border-radius: 999px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+  .composer { border-top: 1px solid var(--line); background: var(--panel); padding: 14px 0 18px; }
+  .box { display: flex; gap: 10px; align-items: flex-end; border: 1px solid var(--line); border-radius: 12px; padding: 8px 8px 8px 14px; }
+  .box:focus-within { border-color: var(--primary); }
+  .box textarea { flex: 1; border: none; resize: none; font: inherit; outline: none; min-height: 24px; max-height: 160px; background: transparent; }
+  .tips { font-size: 12px; color: var(--muted); margin-top: 6px; display: flex; justify-content: space-between; }
+  .center-msg { text-align: center; color: var(--muted); padding: 40px 0; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Know<span>Learn</span> 智能教育知识库</div>
+  <nav class="nav"><a href="/import.html">导入资料</a><a href="/chat.html" class="active">智能问答</a></nav>
+  <div class="spacer"></div>
+  <div class="health" id="health"><i class="dot"></i>检查中…</div>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <button class="btn btn-primary new" id="newSess">＋ 新建会话</button>
+    <div class="sessions" id="sessions"><div class="center-msg">加载中…</div></div>
+  </aside>
+  <section class="main">
+    <div class="msgs" id="msgs"><div class="inner" id="inner"></div></div>
+    <button class="btn to-bottom" id="toBottom" hidden>↓ 回到底部</button>
+    <div class="composer">
+      <div class="inner">
+        <div class="box">
+          <textarea id="q" rows="1" maxlength="1000" placeholder="问课程、查知识点、找题目…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <button class="btn" id="stop" hidden>■ 停止</button>
+          <button class="btn btn-primary" id="send" disabled>发送</button>
+        </div>
+        <div class="tips"><span>回答基于知识库（必要时结合联网搜索）生成，请以来源资料为准</span><span id="cnt">0 / 1000</span></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/purify.min.js"></script>
+<script src="/js/common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const CT = { course_intro: '课程介绍', doc_chunk: '文档片段', project_material: '项目资料', question: '题目' };
+const STAGES = [['rewrite', '理解问题'], ['retrieve', '检索中'], ['rerank', '整理结果'], ['generate', '生成答案']];
+const DEGRADE = '联网搜索暂不可用';
+const LS_KEY = 'knowlearn_session_id';
+const EXAMPLES = [
+  ['📚 课程推荐', '有哪些编程相关的入门课程？'], ['🧭 课程详情', '通用编程项目班的详情'],
+  ['📖 文档检索', 'FastAPI 的路径参数怎么做类型校验？'], ['📝 题目检索', '查询函数相关的选择题'],
+];
+marked.setOptions({ gfm: true, breaks: true });
+
+let sessions = [], cur = null, messages = [], generating = false, aborter = null;
+
+// ================= 会话列表（交互设计 3.1） =================
+async function loadSessions(selectId) {
+  try {
+    sessions = (await api('/sessions?page_size=100')).items;
+  } catch (e) {
+    $('sessions').innerHTML = `<div class="center-msg">无法连接服务<br><button class="btn" onclick="loadSessions()">重试</button></div>`;
+    return;
+  }
+  const want = selectId ?? (cur && cur.session_id) ?? safeGet();
+  renderSessions();
+  const target = sessions.find(s => s.session_id === want) || sessions[0];
+  if (target && (!cur || cur.session_id !== target.session_id)) await openSession(target.session_id);
+  else if (!target) { cur = null; messages = []; renderMessages(); }
+}
+function safeGet() { try { return localStorage.getItem(LS_KEY); } catch (e) { return null; } }
+function safeSet(v) { try { v ? localStorage.setItem(LS_KEY, v) : localStorage.removeItem(LS_KEY); } catch (e) { /* 忽略 */ } }
+function renderSessions() {
+  const today = new Date().toDateString();
+  let html = '', g = '';
+  for (const s of sessions) {
+    const grp = new Date(s.updated_at).toDateString() === today ? '今天' : '更早';
+    if (grp !== g) { g = grp; html += `<div class="group">${g}</div>`; }
+    const t = new Date(s.updated_at), p = n => String(n).padStart(2, '0');
+    const time = grp === '今天' ? `${p(t.getHours())}:${p(t.getMinutes())}` : `${p(t.getMonth() + 1)}-${p(t.getDate())}`;
+    html += `<div class="sess ${cur && cur.session_id === s.session_id ? 'on' : ''}" data-id="${s.session_id}" title="${esc(s.title)}">
+      <span class="t">${esc(s.title)}</span><span class="time">${time}</span><button class="btn-text del" data-del="${s.session_id}" title="删除">🗑</button></div>`;
+  }
+  $('sessions').innerHTML = html || '<div class="center-msg">暂无会话</div>';
+}
+async function openSession(id) {
+  cur = sessions.find(s => s.session_id === id) || { session_id: id };
+  safeSet(id); renderSessions();
+  $('inner').innerHTML = '<div class="center-msg">加载中…</div>';
+  try {
+    messages = (await api(`/sessions/${id}/messages`)).items;
+  } catch (e) {
+    if (e.code === 40402) { toast('会话已不存在'); cur = null; return loadSessions(); }
+    $('inner').innerHTML = `<div class="center-msg">${esc(e.message)}</div>`; return;
+  }
+  renderMessages(); scrollBottom(true);
+}
+$('sessions').addEventListener('click', async e => {
+  if (generating) return;
+  const del = e.target.closest('[data-del]');
+  if (del) {
+    e.stopPropagation();
+    if (!confirm('删除后该会话的全部消息将无法恢复，确定删除？')) return;
+    try { await api(`/sessions/${del.dataset.del}`, { method: 'DELETE' }); toast('已删除'); }
+    catch (err) { return toast(err.message, true); }
+    if (cur && cur.session_id === del.dataset.del) { cur = null; safeSet(null); }
+    return loadSessions();
+  }
+  const el = e.target.closest('.sess');
+  if (el && (!cur || el.dataset.id !== cur.session_id)) openSession(el.dataset.id);
+});
+$('newSess').addEventListener('click', () => {   // 不立即调用 B1，发送第一个问题时才创建
+  if (generating) return;
+  cur = null; messages = []; safeSet(null); renderSessions(); renderMessages(); $('q').focus();
+});
+
+// ================= 消息渲染（交互设计 3.4） =================
+function renderMarkdown(text) {
+  const html = DOMPurify.sanitize(marked.parse(text || ''));
+  const box = document.createElement('div'); box.innerHTML = html;
+  return box;
+}
+function decorateCitations(box, sources) {
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, {
+    acceptNode: n => n.parentElement.closest('code, pre') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const nodes = []; while (walker.nextNode()) if (/\[\d+\]/.test(walker.currentNode.nodeValue)) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const frag = document.createDocumentFragment();
+    node.nodeValue.split(/(\[\d+\])/).forEach(part => {
+      const m = part.match(/^\[(\d+)\]$/);
+      const src = m && sources ? sources.find(s => s.index === Number(m[1])) : null;
+      if (src) {
+        const c = document.createElement('i'); c.className = 'cite' + (src.source_type === 'web' ? ' w' : '');
+        c.dataset.n = m[1]; c.textContent = m[1]; c.title = '查看来源 ' + m[1]; frag.appendChild(c);
+      } else if (part) frag.appendChild(document.createTextNode(part));
+    });
+    node.replaceWith(frag);
+  }
+  return box;
+}
+function srcCard(s) {
+  if (s.source_type === 'web') {
+    return `<div class="src web" data-n="${s.index}"><div class="h"><span class="n">[${s.index}]</span><span class="tag web">网络</span></div>
+      <div class="main-line"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)}</a></div>
+      <div class="kv" title="${esc(s.url)}">${esc(s.url)}</div>${s.snippet ? `<div class="snip">${esc(s.snippet)}</div>` : ''}</div>`;
+  }
+  let main, lines = [];
+  if (s.content_type === 'question') {
+    main = [s.bank_name, s.question_type].filter(Boolean).join(' · ');
+    if (s.question_code) lines.push(esc(s.question_code));
+    if (s.course_name) lines.push('课程归属：' + esc(s.course_name));
+  } else {
+    main = s.course_name || s.project_name || s.file_name;
+    if (s.chapter) lines.push('章节：' + esc(s.chapter));
+  }
+  return `<div class="src" data-n="${s.index}"><div class="h"><span class="n">[${s.index}]</span><span class="tag">${CT[s.content_type] || '资料'}</span></div>
+    <div class="main-line" title="${esc(main)}">${esc(main)}</div>${lines.map(l => `<div class="kv" title="${l}">${l}</div>`).join('')}
+    ${s.file_name ? `<div class="kv">📄 ${s.file_url ? `<a href="${esc(s.file_url)}" target="_blank" rel="noopener">${esc(s.file_name)}</a>` : esc(s.file_name)}</div>` : ''}
+    ${s.snippet ? `<div class="snip">${esc(s.snippet)}</div>` : ''}</div>`;
+}
+function botBody(m) {
+  const wrap = document.createElement('div');
+  if (m.progress) {
+    const idx = STAGES.findIndex(([k]) => k === m.progress);
+    wrap.insertAdjacentHTML('beforeend', `<div class="progress">${STAGES.map(([k, t], i) => `<span class="p ${i < idx ? 'done' : i === idx ? 'doing' : ''}">${t}</span>`).join('')}</div>`);
+  }
+  if (m.degraded) wrap.insertAdjacentHTML('beforeend', `<div class="degrade">⚠ 联网搜索暂不可用，仅使用知识库作答</div>`);
+  const ans = document.createElement('div'); ans.className = 'answer';
+  if (m.content) {
+    const showSrc = m.status !== undefined && m.status !== 'streaming';
+    ans.appendChild(showSrc ? decorateCitations(renderMarkdown(m.content), m.sources) : renderMarkdown(m.content));
+  }
+  if (m.status === 'streaming' && m.content && ans.lastElementChild) {
+    const last = ans.lastElementChild.lastElementChild || ans.lastElementChild;
+    last.insertAdjacentHTML('beforeend', '<span class="caret"></span>');
+  }
+  wrap.appendChild(ans);
+  if (m.status === 'interrupted') wrap.insertAdjacentHTML('beforeend', '<div class="ended">— 已停止生成 —</div>');
+  if (m.status === 'failed') wrap.insertAdjacentHTML('beforeend', `<div class="fail">✕ ${esc(m.error || '回答生成失败')}
+    <button class="btn" style="margin-left:8px" data-retry="${esc(m.query || '')}">重试</button></div>`);
+  const done = m.status === 'completed' || m.status === 'interrupted';
+  if (done && m.sources && m.sources.length) {
+    wrap.insertAdjacentHTML('beforeend', `<div class="srcs"><div class="srcs-title">参考来源 ${m.sources.length} 条</div>
+      <div class="src-grid">${m.sources.map(srcCard).join('')}</div></div>`);
+  }
+  if (done && m.images && m.images.length) {
+    wrap.insertAdjacentHTML('beforeend', `<div class="imgs">${m.images.map(im => `<div class="img" data-url="${esc(im.url)}" title="点击查看原图">
+      <img src="${esc(im.url)}" alt="${esc(im.caption)}" loading="lazy" onerror="this.outerHTML='<div class=&quot;broken&quot;>图片加载失败</div>'">
+      <div class="cap">${esc(im.caption)}（来源 [${im.source_index}]）</div></div>`).join('')}</div>`);
+  }
+  if (done && m.content) wrap.insertAdjacentHTML('beforeend', `<div class="ops"><button class="btn-text" data-copy="1">⧉ 复制</button></div>`);
+  return wrap;
+}
+function msgEl(m, i) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + (m.role === 'user' ? 'user' : 'bot'); div.dataset.i = i;
+  if (m.role === 'user') { div.innerHTML = `<div class="bubble">${esc(m.content)}</div>`; return div; }
+  if (!m.query && messages[i - 1] && messages[i - 1].role === 'user') m.query = messages[i - 1].content;   // 历史消息的重试问题
+  div.innerHTML = '<div class="avatar">K</div><div class="bubble"></div>';
+  div.querySelector('.bubble').appendChild(botBody(m));
+  return div;
+}
+function renderMessages() {
+  const inner = $('inner');
+  if (!messages.length) {
+    inner.innerHTML = `<div class="welcome"><h1>你好，我是 KnowLearn 学习助手</h1>
+      <div class="muted">可以帮你找课程、查课程详情、检索讲义知识点、查找练习题</div>
+      <div class="examples">${EXAMPLES.map(([t, q]) => `<div class="ex" data-q="${esc(q)}"><b>${t}</b><span>${esc(q)}</span></div>`).join('')}</div></div>`;
+    return;
+  }
+  inner.innerHTML = ''; messages.forEach((m, i) => inner.appendChild(msgEl(m, i)));
+}
+function updateLast() {   // 流式过程中只重绘最后一条，避免整页闪烁
+  const i = messages.length - 1, old = $('inner').querySelector(`.msg[data-i="${i}"]`);
+  const el = msgEl(messages[i], i);
+  old ? old.replaceWith(el) : $('inner').appendChild(el);
+  scrollBottom();
+}
+$('inner').addEventListener('click', e => {
+  const ex = e.target.closest('.ex'); if (ex) return ask(ex.dataset.q);
+  const c = e.target.closest('.cite');
+  if (c) {
+    const bubble = c.closest('.bubble');
+    bubble.querySelectorAll('.src').forEach(s => s.classList.toggle('hl', s.dataset.n === c.dataset.n));
+    const card = bubble.querySelector(`.src[data-n="${c.dataset.n}"]`); if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    return;
+  }
+  const img = e.target.closest('.img'); if (img) return window.open(img.dataset.url, '_blank', 'noopener');
+  const retry = e.target.closest('[data-retry]'); if (retry) return ask(retry.dataset.retry);
+  const copy = e.target.closest('[data-copy]');
+  if (copy) {
+    const m = messages[Number(copy.closest('.msg').dataset.i)];
+    navigator.clipboard.writeText(m.content).then(() => toast('已复制'), () => toast('复制失败', true));
+  }
+});
+
+// ================= 滚动（交互设计 3.3 自动滚动） =================
+const nearBottom = () => { const m = $('msgs'); return m.scrollHeight - m.scrollTop - m.clientHeight < 80; };
+let stick = true;
+$('msgs').addEventListener('scroll', () => { stick = nearBottom(); $('toBottom').hidden = stick || !messages.length; });
+function scrollBottom(force) { if (force || stick) { $('msgs').scrollTop = $('msgs').scrollHeight; stick = true; $('toBottom').hidden = true; } else $('toBottom').hidden = false; }
+$('toBottom').addEventListener('click', () => scrollBottom(true));
+
+// ================= 输入框（交互设计 3.2） =================
+const q = $('q');
+function refreshComposer() {
+  $('send').disabled = generating || !q.value.trim();
+  q.disabled = generating; $('stop').hidden = !generating;
+  document.body.classList.toggle('busy', generating);
+  $('cnt').textContent = `${q.value.length} / 1000`;
+}
+q.addEventListener('input', () => { q.style.height = 'auto'; q.style.height = Math.min(q.scrollHeight, 160) + 'px'; refreshComposer(); });
+q.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); if (!$('send').disabled) $('send').click(); }
+});
+$('send').addEventListener('click', () => { const text = q.value; q.value = ''; q.style.height = 'auto'; ask(text); });
+$('stop').addEventListener('click', () => { if (aborter) aborter.abort(); });
+
+// ================= 提问（交互设计 3.3 状态机） =================
+async function ask(text) {
+  text = (text || '').trim();
+  if (generating || !text) return;
+  generating = true; refreshComposer();
+  try {
+    if (!cur) {           // 新会话：发送第一个问题时才创建（B1）
+      const s = await api('/sessions', { method: 'POST' });
+      cur = s; sessions.unshift(s); safeSet(s.session_id); renderSessions();
+    }
+  } catch (e) { generating = false; refreshComposer(); q.value = text; return toast(e.message, true); }
+
+  messages.push({ role: 'user', content: text });
+  const bot = { role: 'assistant', status: 'streaming', progress: 'rewrite', content: '', sources: [], images: [], query: text };
+  messages.push(bot);
+  if (messages.length === 2) renderMessages(); else { $('inner').appendChild(msgEl(messages[messages.length - 2], messages.length - 2)); }
+  updateLast(); scrollBottom(true);
+
+  aborter = new AbortController();
+  let pending = null;
+  // 用定时器而不是 requestAnimationFrame 合并重绘：后者在标签页不可见时暂停，切走再切回会看到界面停住
+  const flush = () => { pending = null; updateLast(); };
+  const schedule = () => { if (!pending) pending = setTimeout(flush, 50); };
+  try {
+    const res = await fetch(`${API}/sessions/${cur.session_id}/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: text, stream: true }), signal: aborter.signal,
+    });
+    if (!res.ok || !(res.headers.get('content-type') || '').startsWith('text/event-stream')) {
+      let body = null; try { body = await res.json(); } catch (e) { /* 忽略 */ }
+      throw new ApiError(body ? body.code : res.status, (body && body.message) || `请求失败（HTTP ${res.status}）`, res.status);
+    }
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        const ev = (block.match(/^event: (.*)$/m) || [])[1], raw = (block.match(/^data: (.*)$/m) || [])[1];
+        if (!ev || raw === undefined) continue;
+        const d = JSON.parse(raw);
+        if (ev === 'progress') { if (d.message && d.message.includes(DEGRADE)) bot.degraded = true; else bot.progress = d.stage; }
+        else if (ev === 'sources') { bot.sources = d.sources; bot.images = d.images; }   // 先暂存，done 后再显示（交互决策 I4）
+        else if (ev === 'delta') { bot.content += d.text; bot.progress = 'generate'; }
+        else if (ev === 'done') { bot.content = d.content; bot.status = 'completed'; bot.progress = null; }
+        else if (ev === 'error') { bot.status = 'failed'; bot.error = d.message; bot.progress = null; }
+        schedule();
+      }
+    }
+    if (bot.status === 'streaming') { bot.status = 'failed'; bot.error = '连接中断'; bot.progress = null; }
+  } catch (e) {
+    bot.progress = null;
+    if (e.name === 'AbortError') { bot.status = 'interrupted'; }
+    else if (e.code === 40901) { messages.splice(-2, 2); renderMessages(); toast('上一个问题还在回答中', true); }
+    else if (e.code === 40402) { messages.splice(-2, 2); toast('会话已不存在', true); cur = null; loadSessions(); }
+    else { bot.status = 'failed'; bot.error = e.message || '连接中断'; }
+  } finally {
+    if (pending) clearTimeout(pending);
+    if (messages.includes(bot)) updateLast();
+    generating = false; aborter = null; refreshComposer(); q.focus();
+    if (cur) {   // 刷新标题与排序
+      const s = sessions.find(x => x.session_id === cur.session_id);
+      if (s) { s.updated_at = new Date().toISOString(); if (s.title === '新会话') s.title = text.slice(0, 20); sessions.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at)); renderSessions(); }
+    }
+  }
+}
+
+refreshComposer();
+loadSessions();
+</script>
 </body>
 </html>

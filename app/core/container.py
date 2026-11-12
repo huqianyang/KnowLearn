@@ -11,9 +11,13 @@ from app.infra.mineru import MinerUClient
 from app.infra.mongo import Mongo
 from app.infra.storage import Storage
 from app.infra.vector_store import VectorStore
+from app.infra.websearch import WebSearchClient
 from app.pipelines.importing.graph import Deps, ImportPipeline
+from app.pipelines.query.graph import QueryPipeline
+from app.services.chat_service import ChatService
 from app.services.import_service import ImportService
 from app.services.import_worker import ImportWorker
+from app.services.session_service import SessionService
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +33,8 @@ class Container:
     mineru: MinerUClient
     import_worker: ImportWorker
     import_service: ImportService
+    session_service: SessionService
+    chat_service: ChatService
 
     @classmethod
     def build(cls, s: Settings) -> "Container":
@@ -42,7 +48,10 @@ class Container:
         pipeline = ImportPipeline(Deps(s, mongo, storage, vectors, models, llm, mineru))
         worker = ImportWorker(mongo, pipeline)
         service = ImportService(s, mongo, on_created=worker.notify)
-        return cls(s, mongo, storage, vectors, models, llm, mineru, worker, service)
+        sessions = SessionService(mongo)
+        web = WebSearchClient(s.web_search_mcp_url, s.dashscope_api_key)
+        chat = ChatService(sessions, QueryPipeline(models, vectors, llm, web, s.rerank_min_score), s.history_rounds)
+        return cls(s, mongo, storage, vectors, models, llm, mineru, worker, service, sessions, chat)
 
     def startup(self) -> None:
         """初始化顺序：先连中间件并建好结构，再加载模型，最后启动导入线程。任何一步失败都让启动失败。"""

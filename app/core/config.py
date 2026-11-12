@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     log_dir: Path = PROJECT_ROOT / "logs"
     temp_dir: Path = PROJECT_ROOT / "temp_data"
     max_upload_mb: int = 50
+    history_rounds: int = 3            # 多轮对话带入的历史轮数（数据库设计 DB2）
+    rerank_min_score: float = -3.0     # 重排相关性阈值（bge-reranker 原始分数）。M4 实测：相关内容约 -0.6～-2.5，不相关多低于 -3
 
     # ---- 硅基流动 ----
     siliconflow_api_key: str = Field(min_length=1)

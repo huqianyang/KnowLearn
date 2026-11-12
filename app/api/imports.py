@@ -31,4 +31,4 @@ async def get_task(task_id: str, c: Container = Depends(get_container)):
 @router.get("")
 async def list_tasks(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
                      status: str | None = Query(None), c: Container = Depends(get_container)):
-    return ok(await asyncio.to_thread(c.import_service.list, page, page_size, status))
+    return ok(await asyncio.to_thread(c.import_service.list_tasks, page, page_size, status))

@@ -38,18 +38,22 @@ class LocalModels:
             if not Path(p).exists():
                 raise FileNotFoundError(f"模型目录不存在：{p}")
 
-        from FlagEmbedding import BGEM3FlagModel, FlagReranker
+        from FlagEmbedding import BGEM3FlagModel
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         try:
             t = time.time()
             self._embedder = BGEM3FlagModel(str(self.embedding_path), use_fp16=True, devices="cuda")
             logger.info("bge-m3 已加载到 GPU（%.1fs）", time.time() - t)
             t = time.time()
-            self._reranker = FlagReranker(str(self.rerank_path), use_fp16=True, devices="cuda")
+            # reranker 直接用 transformers 加载：FlagReranker 在当前 transformers 版本下对超长输入的截断有 bug，
+            # 且 bge-reranker-large（XLM-R large）最多只支持 512 token，超出会触发 CUDA 越界断言（M4 实测）
+            self._rr_tokenizer = AutoTokenizer.from_pretrained(str(self.rerank_path))
+            self._reranker = AutoModelForSequenceClassification.from_pretrained(str(self.rerank_path)).half().cuda().eval()
             logger.info("reranker 已加载到 GPU（%.1fs）", time.time() - t)
-            # 预热，避免第一次请求变慢
+            # 预热，避免第一次请求变慢；用超长文本确认截断生效
             self.encode(["预热"])
-            self.rerank("预热", ["预热"])
+            self.rerank("预热", ["预热" * 2000])
         except torch.cuda.OutOfMemoryError as e:
             free, total = torch.cuda.mem_get_info()
             raise GpuUnavailableError(
@@ -73,11 +77,20 @@ class LocalModels:
         sparse = [{int(k): float(v) for k, v in w.items()} for w in out["lexical_weights"]]
         return EncodeResult(dense=dense, sparse=sparse)
 
-    def rerank(self, query: str, passages: list[str]) -> list[float]:
+    RERANK_MAX_TOKENS = 512     # bge-reranker-large 的位置编码上限
+
+    def rerank(self, query: str, passages: list[str], batch_size: int = 16) -> list[float]:
+        """返回 bge-reranker 原始 logit 分数（越大越相关）。"""
+        import torch
+
         if not passages:
             return []
-        with self.lock:
-            scores = self._reranker.compute_score([[query, p] for p in passages], max_length=1024)
-        if isinstance(scores, float):
-            scores = [scores]
-        return [float(s) for s in scores]
+        scores: list[float] = []
+        with self.lock, torch.inference_mode():
+            for i in range(0, len(passages), batch_size):
+                batch = passages[i:i + batch_size]
+                enc = self._rr_tokenizer([query] * len(batch), batch, padding=True, truncation="only_second",
+                                         max_length=self.RERANK_MAX_TOKENS, return_tensors="pt").to("cuda")
+                logits = self._reranker(**enc).logits.view(-1).float()
+                scores += logits.cpu().tolist()
+        return scores

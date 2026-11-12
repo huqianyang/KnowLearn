@@ -33,6 +33,17 @@ REQUIRED_FIELDS = {"chunk_id", "dense_vector", "sparse_vector"} | {f[0] for f in
 OUTPUT_FIELDS = [f[0] for f in _SCALAR_FIELDS]
 
 
+def _hit(h) -> dict:
+    """搜索结果统一成 dict：主键字段名是 chunk_id（技术验证 S5）。"""
+    d = dict(h["entity"])
+    try:
+        d["chunk_id"] = h["chunk_id"]
+    except KeyError:
+        d["chunk_id"] = h["id"]
+    d["score"] = float(h["distance"])
+    return d
+
+
 def quote(value: str) -> str:
     """把字符串安全地放进 Milvus 过滤表达式。"""
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -89,6 +100,26 @@ class VectorStore:
 
     def query(self, expr: str, fields: list[str], limit: int = 16384) -> list[dict]:
         return self.client.query(self.collection, filter=expr, output_fields=fields, limit=limit)
+
+    # ---------------- 检索（M4） ----------------
+
+    def hybrid_search(self, dense: list[float], sparse: dict[int, float], expr: str = "", limit: int = 10) -> list[dict]:
+        """稠密 + 稀疏两路检索，Milvus 内部 RRF 融合（技术方案 5.2 kb_search）。"""
+        from pymilvus import AnnSearchRequest, RRFRanker
+
+        reqs = [
+            AnnSearchRequest([dense], "dense_vector", {"metric_type": "COSINE", "params": {"ef": 64}}, limit, expr=expr or None),
+            AnnSearchRequest([sparse or {0: 1e-6}], "sparse_vector", {"metric_type": "IP"}, limit, expr=expr or None),
+        ]
+        res = self.client.hybrid_search(self.collection, reqs, RRFRanker(60), limit=limit,
+                                        output_fields=OUTPUT_FIELDS)
+        return [_hit(h) for h in res[0]]
+
+    def dense_search(self, dense: list[float], expr: str = "", limit: int = 10) -> list[dict]:
+        res = self.client.search(self.collection, [dense], anns_field="dense_vector", limit=limit,
+                                 filter=expr or "", output_fields=OUTPUT_FIELDS,
+                                 search_params={"metric_type": "COSINE", "params": {"ef": 64}})
+        return [_hit(h) for h in res[0]]
 
     def ping(self) -> None:
         self.client.has_collection(self.collection)

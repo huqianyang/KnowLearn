@@ -118,7 +118,7 @@ class ImportService:
         return to_task_view(doc, with_steps=True)
 
     # ---------- A4 ----------
-    def list(self, page: int, page_size: int, status: str | None) -> dict:
+    def list_tasks(self, page: int, page_size: int, status: str | None) -> dict:
         q: dict = {}
         if status:
             wanted = {x.strip() for x in status.split(",") if x.strip()}
