@@ -33,6 +33,11 @@ REQUIRED_FIELDS = {"chunk_id", "dense_vector", "sparse_vector"} | {f[0] for f in
 OUTPUT_FIELDS = [f[0] for f in _SCALAR_FIELDS]
 
 
+def quote(value: str) -> str:
+    """把字符串安全地放进 Milvus 过滤表达式。"""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 class VectorStore:
     def __init__(self, uri: str, collection: str):
         self.client = MilvusClient(uri=uri)
@@ -69,6 +74,21 @@ class VectorStore:
         dim = fields["dense_vector"].get("params", {}).get("dim")
         if dim is not None and int(dim) != DENSE_DIM:
             raise RuntimeError(f"Milvus 集合 {self.collection} 向量维度为 {dim}，期望 {DENSE_DIM}")
+
+    # ---------------- 读写 ----------------
+
+    def insert(self, rows: list[dict], batch_size: int = 200) -> int:
+        n = 0
+        for i in range(0, len(rows), batch_size):
+            n += self.client.insert(self.collection, rows[i:i + batch_size])["insert_count"]
+        return n
+
+    def delete(self, expr: str) -> int:
+        res = self.client.delete(self.collection, filter=expr)
+        return int(res.get("delete_count", 0)) if isinstance(res, dict) else 0
+
+    def query(self, expr: str, fields: list[str], limit: int = 16384) -> list[dict]:
+        return self.client.query(self.collection, filter=expr, output_fields=fields, limit=limit)
 
     def ping(self) -> None:
         self.client.has_collection(self.collection)

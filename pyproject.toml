@@ -17,6 +17,7 @@ dependencies = [
     "mcp>=1.2",
     "langgraph>=0.2",
     "requests>=2.32",
+    "pypdf>=5.0",
 ]
 
 [dependency-groups]

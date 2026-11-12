@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import health
+from app.api import health, imports
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.container import Container
 from app.core.logging import setup_logging
@@ -39,6 +39,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="KnowLearn 智能教育知识库", version="0.1.0", lifespan=lifespan)
     register_exception_handlers(app)
     app.include_router(health.router)
+    app.include_router(imports.router)
 
     @app.get("/", include_in_schema=False)
     async def root():
