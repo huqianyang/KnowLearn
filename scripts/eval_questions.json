@@ -1,0 +1,17 @@
+[
+  {"id": "C1", "scenario": "课程介绍", "query": "有哪些编程相关的入门课程？", "expect_types": ["course_intro"], "expect_text": ["通用编程入门班"], "no_web": true},
+  {"id": "C2", "scenario": "课程介绍", "query": "推荐一个适合入门的 RAG 课程", "expect_types": ["course_intro"], "expect_text": ["大模型应用开发班"], "no_web": true},
+  {"id": "C3", "scenario": "课程介绍", "query": "有哪些数据分析方向的课程，分别适合什么人群？", "expect_types": ["course_intro"], "expect_text": ["数据分析"], "no_web": true},
+  {"id": "D1", "scenario": "课程详情", "query": "通用编程项目班的详情", "expect_types": ["course_intro"], "expect_text": ["通用编程入门班", "综合项目开发与讲评"], "no_web": true},
+  {"id": "D2", "scenario": "课程详情", "query": "班组长带人训练营适合什么年级？先修要求是什么？", "expect_types": ["course_intro"], "expect_text": ["资料未提供"], "no_web": true},
+  {"id": "K1", "scenario": "文档检索", "query": "FastAPI 的路径参数怎么做类型校验？", "expect_types": ["doc_chunk"], "expect_text": ["item_id"]},
+  {"id": "K2", "scenario": "文档检索", "query": "Git 如何撤销最近一次提交？", "expect_types": ["doc_chunk"], "expect_text": ["git"]},
+  {"id": "K3", "scenario": "文档检索", "query": "MySQL 中如何创建索引？", "expect_types": ["doc_chunk"], "expect_text": ["INDEX"]},
+  {"id": "K4", "scenario": "文档检索", "query": "Transformer 中的自注意力机制是怎么计算的？", "expect_types": ["doc_chunk"], "expect_text": ["Q"]},
+  {"id": "P1", "scenario": "项目资料", "query": "掌柜智库项目的文档导入流程包含哪些节点？", "expect_types": ["project_material"], "expect_text": ["切分"]},
+  {"id": "P2", "scenario": "项目资料", "query": "智图寻宝项目用到了哪些技术？", "expect_types": ["project_material"], "expect_text": []},
+  {"id": "Q1", "scenario": "题目检索", "query": "查询函数相关的选择题", "expect_types": ["question"], "expect_text": ["general_purpose_programming_bank_q004"], "no_web": true},
+  {"id": "Q2", "scenario": "题目检索", "query": "Python 有哪些练习题", "expect_types": ["question", "doc_chunk"], "expect_text": [], "no_web": true},
+  {"id": "Q3", "scenario": "题目检索", "query": "有哪些关于递归的多选题？", "expect_types": ["question"], "expect_text": ["general_purpose_programming_bank_q009"], "no_web": true},
+  {"id": "Q4", "scenario": "题目检索", "query": "general_purpose_programming_bank_q004 这道题的答案和解析是什么？", "expect_types": ["question"], "expect_text": ["B"], "no_web": true}
+]

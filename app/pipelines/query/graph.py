@@ -118,8 +118,12 @@ class QueryPipeline:
             logger.warning("HyDE 生成失败，跳过该路：%s", e)
             return {"hyde_hits": []}
         enc = self.models.encode([doc])
-        expr = ranking.build_filter([], s["question_types"]) if s["question_types"] else ""
-        return {"hyde_hits": self.vectors.dense_search(enc.dense[0], expr, HYDE_LIMIT)}
+        # 与知识库检索使用同一过滤条件；没识别出类型时不过滤，过严时同样放宽一次
+        expr = ranking.build_filter(s["content_types"], s["question_types"])
+        hits = self.vectors.dense_search(enc.dense[0], expr, HYDE_LIMIT)
+        if not hits and expr:
+            hits = self.vectors.dense_search(enc.dense[0], "", HYDE_LIMIT)
+        return {"hyde_hits": hits}
 
     def _web_search(self, s: QueryState, ctx: QueryContext) -> dict:
         if not ranking.needs_web(s["content_types"]):
