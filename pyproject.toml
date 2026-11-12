@@ -1,0 +1,36 @@
+[project]
+name = "knowlearn"
+version = "0.1.0"
+description = "KnowLearn 智能教育知识库"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.12",
+    "pydantic-settings>=2.6",
+    "pymongo>=4.10",
+    "minio>=7.2",
+    "pymilvus>=2.5,<2.6",
+    "torch==2.14.1",
+    "FlagEmbedding>=1.3",
+    "openai>=1.50",
+    "mcp>=1.2",
+    "langgraph>=0.2",
+    "requests>=2.32",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+# 使用本机已下载的 CUDA 12.6 版 torch，不从网上下载
+torch = { path = "D:/ai_models/wheels/torch-2.14.1+cu126-cp313-cp313-win_amd64.whl" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

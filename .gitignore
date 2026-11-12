@@ -1,0 +1,22 @@
+# 环境与密钥
+.env
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# 运行时临时文件
+temp_data/
+logs/
+
+# 内部设计文档（PRD、设计、原型）：仓库公开，不提交
+docs/
+
+# IDE
+.idea/workspace.xml
+.idea/shelf/
+.jbeval/
