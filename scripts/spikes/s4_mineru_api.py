@@ -18,9 +18,10 @@ BASE = os.environ["MINERU_API_BASE"].rstrip("/")
 HEAD = {"Authorization": f"Bearer {os.environ['MINERU_API_TOKEN']}", "Content-Type": "application/json"}
 
 out_dir, file_path = Path(sys.argv[1]), Path(sys.argv[2])
-page_ranges = sys.argv[3] if len(sys.argv) > 3 else None
+page_ranges = sys.argv[3] if len(sys.argv) > 3 else None   # 可选：只解析部分页，如 "1-10"
 out_dir.mkdir(parents=True, exist_ok=True)
 
+# 1. 申请上传链接
 file_item = {"name": file_path.name, "data_id": "spike"}
 if page_ranges:
     file_item["page_ranges"] = page_ranges
@@ -32,10 +33,12 @@ print("apply:", r.status_code, body.get("code"), body.get("msg"))
 if body.get("code") != 0:
     sys.exit(1)
 batch_id, url = body["data"]["batch_id"], body["data"]["file_urls"][0]
+# 2. 上传文件（上传后自动开始解析）
 with open(file_path, "rb") as f:
     up = requests.put(url, data=f, timeout=300)
 print("upload:", up.status_code, f"{time.time() - t0:.1f}s")
 
+# 3. 每 5 秒轮询一次，状态或进度变化时打印
 last = None
 while True:
     time.sleep(5)
@@ -52,6 +55,7 @@ while True:
 if state != "done":
     sys.exit(1)
 
+# 4. 下载结果压缩包，查看文件结构、标题和图片引用格式
 zbytes = requests.get(item["full_zip_url"], timeout=300).content
 z = zipfile.ZipFile(io.BytesIO(zbytes))
 names = z.namelist()

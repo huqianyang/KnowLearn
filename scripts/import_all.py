@@ -20,10 +20,12 @@ from pathlib import Path
 
 import requests
 
+# 图片引用：<img src="..."> 或 ![](...)，两个分组分别对应两种写法
 IMG_REF = re.compile(r'<img[^>]*?src\s*=\s*["\']([^"\']+)["\']|!\[[^\]]*\]\(\s*<?([^)\s>]+)', re.I)
 
 
 def submit(base: str, path: Path, doc_type: str, name: str | None = None) -> str:
+    """上传一个文件并创建导入任务，返回任务 ID。name 为课程名（讲义）或项目名（项目文档）。"""
     data = {"doc_type": doc_type}
     if name:
         data["course_name" if doc_type == "lecture" else "project_name"] = name
@@ -37,11 +39,13 @@ def submit(base: str, path: Path, doc_type: str, name: str | None = None) -> str
 
 
 def suggest(base: str, filename: str, doc_type: str) -> str:
+    """调用接口 A1，取文件名对应的默认课程名 / 项目名（与导入页的默认值一致）。"""
     d = requests.get(f"{base}/api/v1/imports/suggest", params={"filename": filename, "doc_type": doc_type}, timeout=30).json()["data"]
     return d["course_name"] if doc_type == "lecture" else d["project_name"]
 
 
 def wait(base: str, task_id: str) -> dict:
+    """每 3 秒查询一次任务，直到成功或失败，返回任务详情。"""
     while True:
         d = requests.get(f"{base}/api/v1/imports/{task_id}", timeout=30).json()["data"]
         if d["status"] in ("succeeded", "failed"):
@@ -53,12 +57,14 @@ def zip_markdown(md: Path, out_dir: Path) -> Path:
     """把一个 md 和它引用的本地图片打成 zip，保持相对路径。"""
     text = md.read_text(encoding="utf-8")
     refs = {a or b for a, b in IMG_REF.findall(text)}
+    # 压缩包名带上所在目录名，避免不同项目下的同名 md 互相覆盖
     out = out_dir / f"{md.parent.name}_{md.stem}.zip"
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(md, md.name)
         for ref in refs:
             if ref.startswith(("http://", "https://")):
                 continue
+            # 只打包 md 所在目录内真实存在的图片
             p = (md.parent / ref).resolve()
             if p.is_file() and p.is_relative_to(md.parent.resolve()):
                 z.write(p, p.relative_to(md.parent.resolve()).as_posix())
@@ -66,6 +72,7 @@ def zip_markdown(md: Path, out_dir: Path) -> Path:
 
 
 def main() -> None:
+    """按 课程目录 → 题库 → 讲义 → 项目文档 的顺序提交，然后等待全部完成并汇总结果。有失败时退出码为 1。"""
     ap = argparse.ArgumentParser()
     ap.add_argument("data_dir", type=Path)
     ap.add_argument("--base", default="http://127.0.0.1:8010")
@@ -77,6 +84,7 @@ def main() -> None:
     if "catalog" in only:
         print("课程目录：")
         t = submit(base, root / "课程介绍.md", "course_catalog")
+        # 题库的课程归属依赖课程目录，必须等它导入完成再提交题库
         d = wait(base, t)
         print(f"  → {d['status']} {d['error'] or ''}")
     if "bank" in only:
@@ -90,6 +98,7 @@ def main() -> None:
         print("项目文档：")
         for f in sorted((root / "项目文档").glob("*.docx")):
             tasks.append(submit(base, f, "project_doc", suggest(base, f.name, "project_doc")))
+        # 子目录中的 md 项目文档：项目名取目录名
         tmp = Path(tempfile.mkdtemp(prefix="knowlearn_zip_"))
         for d in sorted(p for p in (root / "项目文档").iterdir() if p.is_dir()):
             for md in sorted(d.glob("*.md")):

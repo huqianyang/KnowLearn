@@ -20,12 +20,14 @@ ROOT = Path(__file__).resolve().parent
 
 
 def ask(base: str, query: str) -> dict:
+    """新建会话并以流式方式提问，记录各事件到达的时间点（相对提交时刻），返回耗时、来源、答案和消息状态。"""
     sid = requests.post(f"{base}/api/v1/sessions", timeout=10).json()["data"]["session_id"]
     t0 = time.time()
     first_progress = first_delta = None
     sources, content, error = [], "", None
     with requests.post(f"{base}/api/v1/sessions/{sid}/chat", json={"query": query, "stream": True},
                        stream=True, timeout=300) as r:
+        # SSE 解析：event 行记下事件名，紧随的 data 行是该事件的数据
         ev = None
         for line in r.iter_lines(decode_unicode=True):
             if line.startswith("event: "):
@@ -50,6 +52,13 @@ def ask(base: str, query: str) -> dict:
 
 
 def check(q: dict, r: dict, timings: dict) -> dict:
+    """按评测题的预期检查结果。
+
+    - type_ok：第一条知识库来源的内容类型在 expect_types 中；
+    - text_ok：答案或来源中包含 expect_text 的每一项（不区分大小写）；
+    - web_ok：标了 no_web 的题没有网络来源；
+    - cited：答案中有 [1] 引用（只记录，不计入通过）。
+    """
     types = [s.get("content_type") for s in r["sources"] if s["source_type"] == "kb"]
     hay = r["content"] + json.dumps(r["sources"], ensure_ascii=False)
     return {
@@ -62,6 +71,7 @@ def check(q: dict, r: dict, timings: dict) -> dict:
 
 
 def main() -> None:
+    """逐题评测并打印结果，最后输出通过数和时延统计；指定 --out 时同时写入 Markdown 报告。"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8010")
     ap.add_argument("--out", type=Path, default=None)
@@ -69,6 +79,7 @@ def main() -> None:
     a = ap.parse_args()
     questions = json.loads((ROOT / "eval_questions.json").read_text(encoding="utf-8"))
     rows = []
+    # 逐题串行执行，避免并发请求互相影响耗时
     for q in questions:
         r = ask(a.base, q["query"])
         c = check(q, r, {})   # 服务端各节点耗时见日志「问答结束 timings=…」与 messages.timings
@@ -86,6 +97,7 @@ def main() -> None:
     passed = sum(1 for q, r, c in rows if c["type_ok"] and c["text_ok"] and c["web_ok"] and not r["error"])
 
     def pct(xs, p):
+        """简单分位数：排序后取最接近 p% 位置的值。"""
         xs = sorted(xs)
         return xs[min(len(xs) - 1, int(round(p / 100 * (len(xs) - 1))))]
 

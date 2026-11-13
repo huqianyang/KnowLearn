@@ -8,18 +8,22 @@ class ParseError(ValueError):
 
 @dataclass
 class ImageRef:
-    url: str
-    caption: str
+    """切片中引用的图片。"""
+
+    url: str        # MinIO 公开地址
+    caption: str    # 视觉模型生成的摘要
 
 
 @dataclass
 class Chunk:
+    """一个待入库的切片。不适用的字段为 None（例如讲义切片没有题型）。"""
+
     content_type: str                 # course_intro / doc_chunk / project_material / question
     content: str                      # 给 LLM 看的正文
     embed_text: str                   # 用于向量化的文本（数据库设计 3.2）
     course_name: str | None = None
     project_name: str | None = None
-    chapter: str | None = None
+    chapter: str | None = None        # 章节路径
     series_code: str | None = None
     direction_code: str | None = None
     bank_name: str | None = None
@@ -30,6 +34,8 @@ class Chunk:
 
 @dataclass
 class SubCourse:
+    """课程系列下的子课程。"""
+
     name: str
     code: str
     lessons: int          # 课时
@@ -39,6 +45,8 @@ class SubCourse:
 
 @dataclass
 class CourseSeries:
+    """一个课程系列（入门班 / 项目班 / 强化班之一）。"""
+
     name: str
     series_code: str
     direction_code: str
@@ -58,6 +66,8 @@ class CourseSeries:
 
 @dataclass
 class Question:
+    """题库中的一道题。"""
+
     code: str
     bank_name: str
     bank_code: str

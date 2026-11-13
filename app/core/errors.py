@@ -1,4 +1,7 @@
-"""错误码与业务异常（对应 API 设计 1.3）。"""
+"""错误码与业务异常（对应 API 设计 1.3）。
+
+业务码规则：前三位与 HTTP 状态码一致，后两位为序号，例如 40401 = 404 + 01。
+"""
 from enum import Enum
 
 
@@ -17,18 +20,28 @@ class ErrorCode(Enum):
 
     @property
     def code(self) -> int:
+        """业务码，放在响应体的 code 字段。"""
         return self.value[0]
 
     @property
     def http_status(self) -> int:
+        """HTTP 状态码。"""
         return self.value[1]
 
     @property
     def default_message(self) -> str:
+        """未指定提示时使用的默认提示。"""
         return self.value[2]
 
 
 class BizError(Exception):
+    """业务异常：在任意层抛出，由全局异常处理转换成统一响应结构。
+
+    Args:
+        error: 错误码。
+        message: 具体提示；不传时使用错误码的默认提示。
+    """
+
     def __init__(self, error: ErrorCode, message: str | None = None):
         self.error = error
         self.message = message or error.default_message

@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- 问答页：左侧会话列表，右侧消息区和输入框。交互设计第 3 章 -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -6,10 +7,12 @@
 <title>智能问答 · KnowLearn</title>
 <link rel="stylesheet" href="/css/app.css">
 <style>
+  /* 整页高度固定，消息区内部滚动 */
   body { display: flex; flex-direction: column; height: 100vh; }
   .layout { flex: 1; display: grid; grid-template-columns: 260px 1fr; min-height: 0; }
   @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } .side { display: none; } }
 
+  /* 会话列表；删除按钮只在悬停时显示；回答中禁止切换会话（body.busy） */
   .side { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
   .side .new { margin: 14px; }
   .sessions { flex: 1; overflow: auto; padding: 0 8px 8px; }
@@ -23,6 +26,7 @@
   .group { font-size: 12px; color: var(--muted); padding: 10px 10px 4px; }
   body.busy .sess, body.busy .new { cursor: not-allowed; opacity: .6; }
 
+  /* 消息：用户消息靠右蓝色气泡，助手消息靠左白色卡片（Markdown 渲染） */
   .main { display: flex; flex-direction: column; min-height: 0; position: relative; }
   .msgs { flex: 1; overflow: auto; padding: 24px 0; }
   .inner { max-width: 860px; margin: 0 auto; padding: 0 24px; }
@@ -39,12 +43,15 @@
   .answer pre { background: #f6f8fa; padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
   .answer code { font-family: Consolas, "Courier New", monospace; font-size: 13px; }
   .answer :not(pre) > code { background: #f1f3f6; padding: 1px 4px; border-radius: 4px; }
+  /* 引用角标 [n]：知识库蓝色，网络紫色 */
   .cite { display: inline-block; min-width: 18px; text-align: center; font-size: 11px; line-height: 16px; border-radius: 4px; background: var(--primary-soft); color: var(--primary); margin: 0 1px; cursor: pointer; vertical-align: 2px; font-style: normal; }
   .cite.w { background: var(--web-soft); color: var(--web); }
+  /* 生成中的闪烁光标 */
   .caret { display: inline-block; width: 7px; height: 15px; background: var(--primary); vertical-align: -2px; animation: blink 1s infinite; margin-left: 2px; }
   @keyframes blink { 50% { opacity: 0; } }
   .ended { color: var(--muted); font-size: 12px; margin: 8px 0; }
 
+  /* 处理进度条（理解问题 → 检索中 → 整理结果 → 生成答案）、联网降级提示、失败提示 */
   .progress { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12px; }
   .progress .p { padding: 2px 10px; border-radius: 999px; background: #eef1f5; color: var(--muted); }
   .progress .p.doing { background: var(--primary-soft); color: var(--primary); }
@@ -52,6 +59,7 @@
   .degrade { font-size: 12px; color: var(--warn); background: var(--warn-soft); border-radius: 6px; padding: 4px 10px; margin-bottom: 8px; display: inline-block; }
   .fail { background: var(--err-soft); color: var(--err); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
 
+  /* 来源卡片：点击引用角标时高亮对应卡片（.hl） */
   .srcs { margin-top: 10px; }
   .srcs-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
   .src-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; }
@@ -65,6 +73,7 @@
   .src .main-line { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .src .kv { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .src .snip { margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  /* 答案中的相关图片缩略图 */
   .imgs { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   .img { width: 200px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); font-size: 12px; cursor: pointer; }
   .img img { width: 100%; height: 120px; object-fit: contain; background: #f6f8fa; display: block; }
@@ -72,6 +81,7 @@
   .img .cap { padding: 6px 8px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .ops { margin-top: 6px; display: flex; gap: 4px; }
 
+  /* 空会话时的欢迎页和示例问题 */
   .welcome { text-align: center; padding-top: 8vh; }
   .welcome h1 { font-size: 22px; margin: 0 0 6px; }
   .examples { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 640px; margin: 24px auto 0; text-align: left; }
@@ -80,6 +90,7 @@
   .ex b { display: block; margin-bottom: 4px; }
   .ex span { color: var(--muted); font-size: 13px; }
 
+  /* 输入区与「回到底部」按钮 */
   .to-bottom { position: absolute; right: 24px; bottom: 120px; border-radius: 999px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
   .composer { border-top: 1px solid var(--line); background: var(--panel); padding: 14px 0 18px; }
   .box { display: flex; gap: 10px; align-items: flex-end; border: 1px solid var(--line); border-radius: 12px; padding: 8px 8px 8px 14px; }
@@ -90,6 +101,7 @@
 </style>
 </head>
 <body>
+<!-- 顶栏 -->
 <header class="topbar">
   <div class="brand">Know<span>Learn</span> 智能教育知识库</div>
   <nav class="nav"><a href="/import.html">导入资料</a><a href="/chat.html" class="active">智能问答</a></nav>
@@ -98,10 +110,12 @@
 </header>
 
 <div class="layout">
+  <!-- 会话列表 -->
   <aside class="side">
     <button class="btn btn-primary new" id="newSess">＋ 新建会话</button>
     <div class="sessions" id="sessions"><div class="center-msg">加载中…</div></div>
   </aside>
+  <!-- 消息区 + 输入框 -->
   <section class="main">
     <div class="msgs" id="msgs"><div class="inner" id="inner"></div></div>
     <button class="btn to-bottom" id="toBottom" hidden>↓ 回到底部</button>
@@ -118,24 +132,29 @@
   </section>
 </div>
 
+<!-- marked：Markdown 转 HTML；DOMPurify：清洗 HTML 防止 XSS（均为本地文件） -->
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script src="/js/common.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-const CT = { course_intro: '课程介绍', doc_chunk: '文档片段', project_material: '项目资料', question: '题目' };
+const CT = { course_intro: '课程介绍', doc_chunk: '文档片段', project_material: '项目资料', question: '题目' };   // 内容类型显示名
+// 处理阶段：与后端 progress 事件的 stage 对应
 const STAGES = [['rewrite', '理解问题'], ['retrieve', '检索中'], ['rerank', '整理结果'], ['generate', '生成答案']];
-const DEGRADE = '联网搜索暂不可用';
-const LS_KEY = 'knowlearn_session_id';
+const DEGRADE = '联网搜索暂不可用';   // 后端联网降级时 progress 消息包含这段文字
+const LS_KEY = 'knowlearn_session_id';   // 记住上次打开的会话
 const EXAMPLES = [
   ['📚 课程推荐', '有哪些编程相关的入门课程？'], ['🧭 课程详情', '通用编程项目班的详情'],
   ['📖 文档检索', 'FastAPI 的路径参数怎么做类型校验？'], ['📝 题目检索', '查询函数相关的选择题'],
 ];
+// gfm：支持表格等 GitHub 语法；breaks：单个换行也换行
 marked.setOptions({ gfm: true, breaks: true });
 
+// sessions：会话列表；cur：当前会话（null 表示还没创建的新会话）；messages：当前会话的消息；aborter：用于停止生成
 let sessions = [], cur = null, messages = [], generating = false, aborter = null;
 
 // ================= 会话列表（交互设计 3.1） =================
+/** 加载会话列表，并打开指定会话（默认：当前会话 → 上次打开的会话 → 最新会话）。 */
 async function loadSessions(selectId) {
   try {
     sessions = (await api('/sessions?page_size=100')).items;
@@ -149,8 +168,10 @@ async function loadSessions(selectId) {
   if (target && (!cur || cur.session_id !== target.session_id)) await openSession(target.session_id);
   else if (!target) { cur = null; messages = []; renderMessages(); }
 }
+// localStorage 在隐私模式下可能不可用，读写都要容错
 function safeGet() { try { return localStorage.getItem(LS_KEY); } catch (e) { return null; } }
 function safeSet(v) { try { v ? localStorage.setItem(LS_KEY, v) : localStorage.removeItem(LS_KEY); } catch (e) { /* 忽略 */ } }
+/** 渲染会话列表，按「今天 / 更早」分组；今天的显示时分，更早的显示月日。 */
 function renderSessions() {
   const today = new Date().toDateString();
   let html = '', g = '';
@@ -164,6 +185,7 @@ function renderSessions() {
   }
   $('sessions').innerHTML = html || '<div class="center-msg">暂无会话</div>';
 }
+/** 打开会话：加载并显示全部消息，滚动到底部。 */
 async function openSession(id) {
   cur = sessions.find(s => s.session_id === id) || { session_id: id };
   safeSet(id); renderSessions();
@@ -171,11 +193,13 @@ async function openSession(id) {
   try {
     messages = (await api(`/sessions/${id}/messages`)).items;
   } catch (e) {
+    // 会话已被删除（例如在其他标签页删除），重新加载列表
     if (e.code === 40402) { toast('会话已不存在'); cur = null; return loadSessions(); }
     $('inner').innerHTML = `<div class="center-msg">${esc(e.message)}</div>`; return;
   }
   renderMessages(); scrollBottom(true);
 }
+// 会话列表点击：删除按钮或切换会话；回答中不允许操作
 $('sessions').addEventListener('click', async e => {
   if (generating) return;
   const del = e.target.closest('[data-del]');
@@ -196,15 +220,21 @@ $('newSess').addEventListener('click', () => {   // 不立即调用 B1，发送�
 });
 
 // ================= 消息渲染（交互设计 3.4） =================
+/** Markdown → 经过清洗的 DOM 节点。 */
 function renderMarkdown(text) {
   const html = DOMPurify.sanitize(marked.parse(text || ''));
   const box = document.createElement('div'); box.innerHTML = html;
   return box;
 }
+/**
+ * 把答案文本中的 [n] 替换为可点击的引用角标。
+ * 只处理文本节点并跳过代码块（代码里的 arr[1] 不是引用），编号在来源中不存在时保持原样。
+ */
 function decorateCitations(box, sources) {
   const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, {
     acceptNode: n => n.parentElement.closest('code, pre') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
   });
+  // 先收集再替换：遍历过程中修改 DOM 会打乱 TreeWalker
   const nodes = []; while (walker.nextNode()) if (/\[\d+\]/.test(walker.currentNode.nodeValue)) nodes.push(walker.currentNode);
   for (const node of nodes) {
     const frag = document.createDocumentFragment();
@@ -220,6 +250,7 @@ function decorateCitations(box, sources) {
   }
   return box;
 }
+/** 来源卡片 HTML：网络来源显示标题和网址；题目显示题库、题型、编码；其他显示课程 / 项目和章节。 */
 function srcCard(s) {
   if (s.source_type === 'web') {
     return `<div class="src web" data-n="${s.index}"><div class="h"><span class="n">[${s.index}]</span><span class="tag web">网络</span></div>
@@ -240,9 +271,14 @@ function srcCard(s) {
     ${s.file_name ? `<div class="kv">📄 ${s.file_url ? `<a href="${esc(s.file_url)}" target="_blank" rel="noopener">${esc(s.file_name)}</a>` : esc(s.file_name)}</div>` : ''}
     ${s.snippet ? `<div class="snip">${esc(s.snippet)}</div>` : ''}</div>`;
 }
+/**
+ * 助手消息的内容：进度 → 降级提示 → 答案 → 停止 / 失败提示 → 来源卡片 → 图片 → 复制按钮。
+ * 来源、图片、引用角标只在回答结束（completed / interrupted）后显示。
+ */
 function botBody(m) {
   const wrap = document.createElement('div');
   if (m.progress) {
+    // 当前阶段之前的标为完成，当前阶段标为进行中
     const idx = STAGES.findIndex(([k]) => k === m.progress);
     wrap.insertAdjacentHTML('beforeend', `<div class="progress">${STAGES.map(([k, t], i) => `<span class="p ${i < idx ? 'done' : i === idx ? 'doing' : ''}">${t}</span>`).join('')}</div>`);
   }
@@ -252,6 +288,7 @@ function botBody(m) {
     const showSrc = m.status !== undefined && m.status !== 'streaming';
     ans.appendChild(showSrc ? decorateCitations(renderMarkdown(m.content), m.sources) : renderMarkdown(m.content));
   }
+  // 生成中在最后一个元素末尾追加闪烁光标
   if (m.status === 'streaming' && m.content && ans.lastElementChild) {
     const last = ans.lastElementChild.lastElementChild || ans.lastElementChild;
     last.insertAdjacentHTML('beforeend', '<span class="caret"></span>');
@@ -266,6 +303,7 @@ function botBody(m) {
       <div class="src-grid">${m.sources.map(srcCard).join('')}</div></div>`);
   }
   if (done && m.images && m.images.length) {
+    // 图片加载失败时替换为文字提示
     wrap.insertAdjacentHTML('beforeend', `<div class="imgs">${m.images.map(im => `<div class="img" data-url="${esc(im.url)}" title="点击查看原图">
       <img src="${esc(im.url)}" alt="${esc(im.caption)}" loading="lazy" onerror="this.outerHTML='<div class=&quot;broken&quot;>图片加载失败</div>'">
       <div class="cap">${esc(im.caption)}（来源 [${im.source_index}]）</div></div>`).join('')}</div>`);
@@ -273,15 +311,18 @@ function botBody(m) {
   if (done && m.content) wrap.insertAdjacentHTML('beforeend', `<div class="ops"><button class="btn-text" data-copy="1">⧉ 复制</button></div>`);
   return wrap;
 }
+/** 生成一条消息的 DOM；data-i 记录它在 messages 中的下标。 */
 function msgEl(m, i) {
   const div = document.createElement('div');
   div.className = 'msg ' + (m.role === 'user' ? 'user' : 'bot'); div.dataset.i = i;
+  // 用户消息用 esc 转义后原样显示，不做 Markdown 渲染
   if (m.role === 'user') { div.innerHTML = `<div class="bubble">${esc(m.content)}</div>`; return div; }
   if (!m.query && messages[i - 1] && messages[i - 1].role === 'user') m.query = messages[i - 1].content;   // 历史消息的重试问题
   div.innerHTML = '<div class="avatar">K</div><div class="bubble"></div>';
   div.querySelector('.bubble').appendChild(botBody(m));
   return div;
 }
+/** 重绘全部消息；没有消息时显示欢迎页和示例问题。 */
 function renderMessages() {
   const inner = $('inner');
   if (!messages.length) {
@@ -298,10 +339,12 @@ function updateLast() {   // 流式过程中只重绘最后一条，避免整页
   old ? old.replaceWith(el) : $('inner').appendChild(el);
   scrollBottom();
 }
+// 消息区点击（事件委托）：示例问题、引用角标、图片、重试、复制
 $('inner').addEventListener('click', e => {
   const ex = e.target.closest('.ex'); if (ex) return ask(ex.dataset.q);
   const c = e.target.closest('.cite');
   if (c) {
+    // 高亮同一条回答中对应编号的来源卡片并滚动到可见位置
     const bubble = c.closest('.bubble');
     bubble.querySelectorAll('.src').forEach(s => s.classList.toggle('hl', s.dataset.n === c.dataset.n));
     const card = bubble.querySelector(`.src[data-n="${c.dataset.n}"]`); if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -317,6 +360,7 @@ $('inner').addEventListener('click', e => {
 });
 
 // ================= 滚动（交互设计 3.3 自动滚动） =================
+// 用户停在底部附近时自动跟随新内容；向上翻看时不打扰，改为显示「回到底部」按钮
 const nearBottom = () => { const m = $('msgs'); return m.scrollHeight - m.scrollTop - m.clientHeight < 80; };
 let stick = true;
 $('msgs').addEventListener('scroll', () => { stick = nearBottom(); $('toBottom').hidden = stick || !messages.length; });
@@ -325,20 +369,29 @@ $('toBottom').addEventListener('click', () => scrollBottom(true));
 
 // ================= 输入框（交互设计 3.2） =================
 const q = $('q');
+/** 根据是否在回答中刷新输入框、发送 / 停止按钮和字数。 */
 function refreshComposer() {
   $('send').disabled = generating || !q.value.trim();
   q.disabled = generating; $('stop').hidden = !generating;
   document.body.classList.toggle('busy', generating);
   $('cnt').textContent = `${q.value.length} / 1000`;
 }
+// 输入框高度随内容自动增长，最高 160px
 q.addEventListener('input', () => { q.style.height = 'auto'; q.style.height = Math.min(q.scrollHeight, 160) + 'px'; refreshComposer(); });
+// Enter 发送、Shift+Enter 换行；输入法组字过程中（isComposing / keyCode 229）按 Enter 不发送
 q.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); if (!$('send').disabled) $('send').click(); }
 });
 $('send').addEventListener('click', () => { const text = q.value; q.value = ''; q.style.height = 'auto'; ask(text); });
+// 停止：中断请求，后端检测到连接断开后停止生成并保存已生成部分
 $('stop').addEventListener('click', () => { if (aborter) aborter.abort(); });
 
 // ================= 提问（交互设计 3.3 状态机） =================
+/**
+ * 提问并流式显示回答。
+ * 助手消息状态：streaming（生成中）→ completed / interrupted / failed。
+ * SSE 用 fetch 读取（EventSource 不支持 POST），按空行切分事件块。
+ */
 async function ask(text) {
   text = (text || '').trim();
   if (generating || !text) return;
@@ -350,6 +403,7 @@ async function ask(text) {
     }
   } catch (e) { generating = false; refreshComposer(); q.value = text; return toast(e.message, true); }
 
+  // 先在界面上追加用户消息和一条生成中的助手消息
   messages.push({ role: 'user', content: text });
   const bot = { role: 'assistant', status: 'streaming', progress: 'rewrite', content: '', sources: [], images: [], query: text };
   messages.push(bot);
@@ -366,17 +420,19 @@ async function ask(text) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: text, stream: true }), signal: aborter.signal,
     });
+    // 校验失败、会话忙等情况后端返回普通 JSON 错误，而不是事件流
     if (!res.ok || !(res.headers.get('content-type') || '').startsWith('text/event-stream')) {
       let body = null; try { body = await res.json(); } catch (e) { /* 忽略 */ }
       throw new ApiError(body ? body.code : res.status, (body && body.message) || `请求失败（HTTP ${res.status}）`, res.status);
     }
     const reader = res.body.getReader(), dec = new TextDecoder();
-    let buf = '';
+    let buf = '';   // 未处理完的数据（一个事件可能被拆成多次到达）
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
       let idx;
+      // 每个事件以空行结尾：取出完整的事件块，解析 event 和 data
       while ((idx = buf.indexOf('\n\n')) >= 0) {
         const block = buf.slice(0, idx); buf = buf.slice(idx + 2);
         const ev = (block.match(/^event: (.*)$/m) || [])[1], raw = (block.match(/^data: (.*)$/m) || [])[1];
@@ -390,10 +446,12 @@ async function ask(text) {
         schedule();
       }
     }
+    // 流结束了却没收到 done / error，视为连接中断
     if (bot.status === 'streaming') { bot.status = 'failed'; bot.error = '连接中断'; bot.progress = null; }
   } catch (e) {
     bot.progress = null;
     if (e.name === 'AbortError') { bot.status = 'interrupted'; }
+    // 40901 会话忙、40402 会话不存在：问题没有被受理，撤回刚追加的两条消息
     else if (e.code === 40901) { messages.splice(-2, 2); renderMessages(); toast('上一个问题还在回答中', true); }
     else if (e.code === 40402) { messages.splice(-2, 2); toast('会话已不存在', true); cur = null; loadSessions(); }
     else { bot.status = 'failed'; bot.error = e.message || '连接中断'; }
@@ -408,6 +466,7 @@ async function ask(text) {
   }
 }
 
+// 页面初始化
 refreshComposer();
 loadSessions();
 </script>

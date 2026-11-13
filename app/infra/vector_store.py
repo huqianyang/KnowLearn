@@ -8,29 +8,31 @@ from pymilvus import DataType, MilvusClient
 
 logger = logging.getLogger(__name__)
 
-DENSE_DIM = 1024
+DENSE_DIM = 1024   # bge-m3 稠密向量维度
 
 # (字段名, 类型, 额外参数)
+# 一个集合存放所有内容类型（课程介绍、讲义片段、项目资料、题目），不适用的字段为空
 _SCALAR_FIELDS: list[tuple[str, DataType, dict]] = [
-    ("content_type", DataType.VARCHAR, {"max_length": 32}),
-    ("content", DataType.VARCHAR, {"max_length": 65535}),
+    ("content_type", DataType.VARCHAR, {"max_length": 32}),     # course_intro / doc_chunk / project_material / question
+    ("content", DataType.VARCHAR, {"max_length": 65535}),       # 用于检索和生成的正文
     ("course_name", DataType.VARCHAR, {"max_length": 512, "nullable": True}),
     ("project_name", DataType.VARCHAR, {"max_length": 256, "nullable": True}),
-    ("chapter", DataType.VARCHAR, {"max_length": 1024, "nullable": True}),
-    ("series_code", DataType.VARCHAR, {"max_length": 128, "nullable": True}),
-    ("direction_code", DataType.VARCHAR, {"max_length": 128, "nullable": True}),
+    ("chapter", DataType.VARCHAR, {"max_length": 1024, "nullable": True}),        # 章节路径，如「2 数据类型 > 2.1 数字」
+    ("series_code", DataType.VARCHAR, {"max_length": 128, "nullable": True}),     # 课程系列编码
+    ("direction_code", DataType.VARCHAR, {"max_length": 128, "nullable": True}),  # 课程方向编码
     ("bank_name", DataType.VARCHAR, {"max_length": 256, "nullable": True}),
     ("question_code", DataType.VARCHAR, {"max_length": 128, "nullable": True}),
-    ("question_type", DataType.VARCHAR, {"max_length": 32, "nullable": True}),
+    ("question_type", DataType.VARCHAR, {"max_length": 32, "nullable": True}),    # 单选题 / 多选题 / 判断题 …
     ("file_name", DataType.VARCHAR, {"max_length": 512}),
     ("file_url", DataType.VARCHAR, {"max_length": 1024}),
-    ("images", DataType.JSON, {"nullable": True}),
-    ("task_id", DataType.VARCHAR, {"max_length": 64}),
-    ("created_at", DataType.INT64, {}),
+    ("images", DataType.JSON, {"nullable": True}),              # 切片中引用的图片 [{url, caption}]
+    ("task_id", DataType.VARCHAR, {"max_length": 64}),          # 写入该切片的导入任务
+    ("created_at", DataType.INT64, {}),                         # 写入时间（毫秒时间戳）
 ]
+# 需要建倒排索引的字段：常用作过滤条件，或按文件 / 任务批量删除
 _INVERTED_FIELDS = ["content_type", "question_type", "direction_code", "file_name", "task_id"]
 REQUIRED_FIELDS = {"chunk_id", "dense_vector", "sparse_vector"} | {f[0] for f in _SCALAR_FIELDS}
-OUTPUT_FIELDS = [f[0] for f in _SCALAR_FIELDS]
+OUTPUT_FIELDS = [f[0] for f in _SCALAR_FIELDS]   # 检索时返回的字段（不返回向量）
 
 
 def _hit(h) -> dict:
@@ -50,11 +52,19 @@ def quote(value: str) -> str:
 
 
 class VectorStore:
+    """Milvus 集合的建表、读写与检索。
+
+    Args:
+        uri: Milvus 地址，如 http://host:19530。
+        collection: 集合名。
+    """
+
     def __init__(self, uri: str, collection: str):
         self.client = MilvusClient(uri=uri)
         self.collection = collection
 
     def ensure_collection(self) -> None:
+        """集合已存在时校验结构并加载；不存在时按设计创建字段和索引。"""
         if self.client.has_collection(self.collection):
             self._check_compatible()
             self.client.load_collection(self.collection)
@@ -68,6 +78,7 @@ class VectorStore:
         schema.add_field("sparse_vector", DataType.SPARSE_FLOAT_VECTOR)
 
         idx = self.client.prepare_index_params()
+        # 稠密向量：HNSW + 余弦相似度；稀疏向量：倒排 + 内积
         idx.add_index("dense_vector", index_type="HNSW", metric_type="COSINE", params={"M": 16, "efConstruction": 200})
         idx.add_index("sparse_vector", index_type="SPARSE_INVERTED_INDEX", metric_type="IP")
         for f in _INVERTED_FIELDS:
@@ -76,6 +87,7 @@ class VectorStore:
         logger.info("已创建 Milvus 集合 %s", self.collection)
 
     def _check_compatible(self) -> None:
+        """检查已有集合的字段和向量维度是否符合设计；不符合时报错，不会自动删除集合。"""
         desc = self.client.describe_collection(self.collection)
         fields = {f["name"]: f for f in desc["fields"]}
         missing = REQUIRED_FIELDS - fields.keys()
@@ -89,16 +101,19 @@ class VectorStore:
     # ---------------- 读写 ----------------
 
     def insert(self, rows: list[dict], batch_size: int = 200) -> int:
+        """分批写入，返回写入条数。"""
         n = 0
         for i in range(0, len(rows), batch_size):
             n += self.client.insert(self.collection, rows[i:i + batch_size])["insert_count"]
         return n
 
     def delete(self, expr: str) -> int:
+        """按过滤表达式删除，返回删除条数。"""
         res = self.client.delete(self.collection, filter=expr)
         return int(res.get("delete_count", 0)) if isinstance(res, dict) else 0
 
     def query(self, expr: str, fields: list[str], limit: int = 16384) -> list[dict]:
+        """按过滤表达式查询标量字段（不做向量检索）。"""
         return self.client.query(self.collection, filter=expr, output_fields=fields, limit=limit)
 
     # ---------------- 检索（M4） ----------------
@@ -109,6 +124,7 @@ class VectorStore:
 
         reqs = [
             AnnSearchRequest([dense], "dense_vector", {"metric_type": "COSINE", "params": {"ef": 64}}, limit, expr=expr or None),
+            # 稀疏向量为空时（如问题全是停用词）Milvus 会报错，用一个极小的占位值代替
             AnnSearchRequest([sparse or {0: 1e-6}], "sparse_vector", {"metric_type": "IP"}, limit, expr=expr or None),
         ]
         res = self.client.hybrid_search(self.collection, reqs, RRFRanker(60), limit=limit,
@@ -116,13 +132,16 @@ class VectorStore:
         return [_hit(h) for h in res[0]]
 
     def dense_search(self, dense: list[float], expr: str = "", limit: int = 10) -> list[dict]:
+        """只用稠密向量检索（HyDE 检索使用）。"""
         res = self.client.search(self.collection, [dense], anns_field="dense_vector", limit=limit,
                                  filter=expr or "", output_fields=OUTPUT_FIELDS,
                                  search_params={"metric_type": "COSINE", "params": {"ef": 64}})
         return [_hit(h) for h in res[0]]
 
     def ping(self) -> None:
+        """连通性检查，失败时抛出异常。"""
         self.client.has_collection(self.collection)
 
     def close(self) -> None:
+        """关闭连接。"""
         self.client.close()

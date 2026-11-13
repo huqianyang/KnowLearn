@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- 导入页：上传资料（左）、当前任务进度（右）、导入记录（下）。交互设计第 2 章 -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -6,14 +7,17 @@
 <title>导入资料 · KnowLearn</title>
 <link rel="stylesheet" href="/css/app.css">
 <style>
+  /* 页面布局：左侧固定 420px 上传表单，右侧进度；窄屏改为单列 */
   .page { max-width: 1200px; margin: 24px auto; padding: 0 24px; display: grid; grid-template-columns: 420px 1fr; gap: 20px; align-items: start; }
   .full { grid-column: 1 / -1; }
   @media (max-width: 900px) { .page { grid-template-columns: 1fr; } }
+  /* 上传区：拖拽悬停时高亮 */
   .drop { border: 2px dashed var(--line); border-radius: var(--radius); padding: 28px 16px; text-align: center; color: var(--muted); cursor: pointer; }
   .drop:hover, .drop.drag { border-color: var(--primary); background: var(--primary-soft); }
   .drop .big { font-size: 28px; }
   .file-chosen { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
   .file-chosen .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 资料类型单选卡片 */
   .types { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .type-opt { border: 1px solid var(--line); border-radius: 8px; padding: 10px; cursor: pointer; }
   .type-opt input { margin-right: 6px; }
@@ -21,6 +25,7 @@
   .type-opt small { display: block; color: var(--muted); margin-left: 20px; }
   .overwrite { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-bottom: 16px; }
 
+  /* 任务进度：步骤列表，图标颜色表示状态 */
   .task-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
   .task-head .fname { font-weight: 600; font-size: 15px; word-break: break-all; }
   .meta { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
@@ -43,6 +48,7 @@
   .result.fail { background: var(--err-soft); color: var(--err); word-break: break-all; }
   .empty { text-align: center; color: var(--muted); padding: 48px 0; }
 
+  /* 导入记录表格、筛选、分页 */
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
   th { color: var(--muted); font-weight: 500; background: #fafbfc; }
@@ -57,6 +63,7 @@
 </style>
 </head>
 <body>
+<!-- 顶栏 -->
 <header class="topbar">
   <div class="brand">Know<span>Learn</span> 智能教育知识库</div>
   <nav class="nav"><a href="/import.html" class="active">导入资料</a><a href="/chat.html">智能问答</a></nav>
@@ -65,11 +72,13 @@
 </header>
 
 <main class="page">
+  <!-- 上传表单 -->
   <section class="card">
     <h2>上传资料</h2>
     <div class="field">
       <label class="title">文件<span class="req">*</span></label>
       <input type="file" id="fileInput" hidden>
+      <!-- 未选文件时显示上传区，选中后显示文件信息 -->
       <div class="drop" id="drop">
         <div class="big">⬆</div>
         <div>点击选择或拖拽文件到这里</div>
@@ -93,6 +102,7 @@
       </div>
     </div>
 
+    <!-- 课程名 / 项目名：只有讲义和项目文档需要 -->
     <div class="field" id="nameField">
       <label class="title"><span id="nameLabel">课程名</span><span class="req">*</span></label>
       <input class="input" id="nameInput" placeholder="选择文件后自动填入，可修改" maxlength="100">
@@ -104,6 +114,7 @@
     <button class="btn btn-primary" id="submit" style="width:100%" disabled>开始导入</button>
   </section>
 
+  <!-- 当前任务进度 -->
   <section class="card">
     <h2>导入进度</h2>
     <div class="empty" id="taskEmpty">提交后在这里查看导入进度<br><small>也可以点击下方导入记录查看详情</small></div>
@@ -115,9 +126,11 @@
     </div>
   </section>
 
+  <!-- 导入记录 -->
   <section class="card full">
     <div class="toolbar">
       <h2>导入记录</h2>
+      <!-- data-f 为传给接口的 status 参数 -->
       <div class="filters" id="filters">
         <button class="btn on" data-f="">全部</button>
         <button class="btn" data-f="pending,running">进行中</button>
@@ -136,19 +149,23 @@
 <script src="/js/common.js"></script>
 <script>
 const $ = id => document.getElementById(id);
+// 显示用的名称与样式映射
 const TYPE_NAME = { course_catalog: '课程目录', question_bank: '题库', lecture: '课程讲义', project_doc: '项目文档' };
+// 各资料类型允许的格式（与后端 ALLOWED_EXT 一致，前端先校验一次，减少无效上传）
 const ALLOWED = { course_catalog: ['.md'], question_bank: ['.md'], lecture: ['.md', '.docx', '.pdf', '.zip'], project_doc: ['.md', '.docx', '.pdf', '.zip'] };
-const STATUS = { pending: ['排队中', 'wait'], running: ['进行中', 'run'], succeeded: ['成功', 'ok'], failed: ['失败', 'err'] };
+const STATUS = { pending: ['排队中', 'wait'], running: ['进行中', 'run'], succeeded: ['成功', 'ok'], failed: ['失败', 'err'] };   // 状态 → [文字, 标签样式]
 const STEP_ICON = { done: '✓', running: '…', failed: '✕', skipped: '–', waiting: '' };
 const STEP_TEXT = { done: '完成', running: '进行中', failed: '失败', skipped: '跳过', waiting: '等待' };
 const MAX_MB = 50, PAGE_SIZE = 20;
 
 // ================= 上传表单（交互设计 2.1） =================
+// file：选中的文件；nameEdited：用户是否手动改过名称（改过就不再自动填）；succeededNames：已成功导入的文件名，用于提示覆盖
 let file = null, nameEdited = false, submitting = false, succeededNames = new Set();
 const currentType = () => document.querySelector('input[name=t]:checked').value;
 const needName = t => t === 'lecture' || t === 'project_doc';
 const extOf = n => (n.match(/\.[^.]+$/) || [''])[0].toLowerCase();
 
+/** 根据当前资料类型和文件刷新表单：名称输入框、格式提示、错误信息、覆盖提示、提交按钮是否可用。 */
 function refreshForm() {
   const t = currentType();
   document.querySelectorAll('.type-opt').forEach(el => el.classList.toggle('sel', el.querySelector('input').checked));
@@ -161,21 +178,25 @@ function refreshForm() {
   $('submit').disabled = submitting || !file || !!fileErr || (needName(t) && !$('nameInput').value.trim());
   $('overwrite').hidden = !(file && succeededNames.has(file.name));
 }
+/** 前端文件校验，返回错误信息（空字符串表示通过）。 */
 function validateFile(f, t) {
   if (!ALLOWED[t].includes(extOf(f.name))) return `不支持的格式，${TYPE_NAME[t]}仅支持 ${ALLOWED[t].join(' / ')}`;
   if (f.size > MAX_MB * 1024 * 1024) return `文件超过 ${MAX_MB} MB`;
   if (f.size === 0) return '文件内容为空';
   return '';
 }
+/** 调用接口 A1，用文件名生成默认课程名 / 项目名；用户手动改过名称时不覆盖。 */
 async function fillSuggest() {
   const t = currentType();
   if (!file || !needName(t) || nameEdited) return refreshForm();
   try {
     const d = await api(`/imports/suggest?filename=${encodeURIComponent(file.name)}&doc_type=${t}`);
+    // 请求返回前用户可能已经开始输入，再检查一次
     if (!nameEdited) $('nameInput').value = (t === 'lecture' ? d.course_name : d.project_name) || '';
   } catch (e) { /* A1 失败时留空，不报错 */ }
   refreshForm();
 }
+/** 选中文件：显示文件信息并自动填写名称。 */
 function chooseFile(f) {
   file = f; nameEdited = false; $('nameInput').value = '';
   $('chosenName').textContent = f.name;
@@ -183,8 +204,10 @@ function chooseFile(f) {
   $('chosen').hidden = false; $('drop').hidden = true;
   fillSuggest();
 }
+// 点击上传区打开文件选择框；选完清空 value，保证再次选择同一文件也能触发 change
 $('drop').addEventListener('click', () => $('fileInput').click());
 $('fileInput').addEventListener('change', e => { if (e.target.files[0]) chooseFile(e.target.files[0]); e.target.value = ''; });
+// 拖拽上传：阻止浏览器默认打开文件的行为，并切换高亮样式
 ['dragenter', 'dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('drag'); }));
 ['dragleave', 'drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('drag'); }));
 $('drop').addEventListener('drop', e => {
@@ -197,6 +220,7 @@ $('clearFile').addEventListener('click', () => { file = null; nameEdited = false
 $('types').addEventListener('change', fillSuggest);
 $('nameInput').addEventListener('input', () => { nameEdited = true; $('nameErr').hidden = true; refreshForm(); });
 
+// 提交：成功后清空表单、显示该任务进度并刷新记录；失败时把错误显示在对应字段下
 $('submit').addEventListener('click', async () => {
   const t = currentType();
   const fd = new FormData();
@@ -211,6 +235,7 @@ $('submit').addEventListener('click', async () => {
     showTask(d.task_id);
     loadHistory();
   } catch (e) {
+    // 40001 格式不支持、40004 文件过大 → 文件下方；40002 缺少名称 → 名称下方；其他用提示
     if ([40001, 40004].includes(e.code)) { $('fileErr').textContent = e.message; $('fileErr').hidden = false; }
     else if (e.code === 40002) { $('nameErr').textContent = e.message; $('nameErr').hidden = false; }
     else toast(e.message, true);
@@ -220,21 +245,26 @@ $('submit').addEventListener('click', async () => {
 });
 
 // ================= 导入进度（交互设计 2.2） =================
+// 进行中的任务每 2 秒轮询一次；连续失败 3 次后停止并提供「重新获取」按钮
 let currentTaskId = null, pollTimer = null, pollFails = 0;
 function stopPolling() { clearTimeout(pollTimer); pollTimer = null; }
+/** 在右侧显示指定任务并开始轮询。 */
 async function showTask(taskId) {
   stopPolling(); currentTaskId = taskId; pollFails = 0;
   highlightRow();
   await pollOnce();
 }
+/** 查询一次任务详情；任务未结束时 2 秒后再查。 */
 async function pollOnce() {
   const id = currentTaskId;
   try {
     const t = await api(`/imports/${id}`);
+    // 请求期间用户切换到了其他任务，丢弃这次结果
     if (id !== currentTaskId) return;
     pollFails = 0;
     renderTask(t);
     if (t.status === 'pending' || t.status === 'running') pollTimer = setTimeout(pollOnce, 2000);
+    // 任务刚结束而记录表中还显示进行中，刷新记录表
     else if (historyHas(id, ['pending', 'running'])) loadHistory();
   } catch (e) {
     if (id !== currentTaskId) return;
@@ -243,6 +273,7 @@ async function pollOnce() {
     } else pollTimer = setTimeout(pollOnce, 2000);
   }
 }
+/** 渲染任务详情：标题、状态、各步骤（含进度条和错误）、最终结果。 */
 function renderTask(t) {
   $('taskEmpty').hidden = true; $('taskBody').hidden = false;
   $('tName').textContent = t.file_name;
@@ -250,6 +281,7 @@ function renderTask(t) {
   const owner = t.course_name || t.project_name;
   $('tMeta').textContent = `${TYPE_NAME[t.doc_type]}${owner ? ' · ' + owner : ''} · 提交于 ${fmtTime(t.created_at)}${t.is_overwrite ? ' · 覆盖导入' : ''}`;
   $('steps').innerHTML = t.steps.map(s => {
+    // 进度单位：转换按页、图片按张、其余按条
     const p = s.progress, unit = s.key === 'convert' ? '页' : s.key === 'images' ? '张' : '条';
     return `<li class="step"><span class="icon ${s.status}">${STEP_ICON[s.status]}</span>
       <div>${esc(s.name)} <span class="sub">${STEP_TEXT[s.status]}</span>
@@ -266,8 +298,10 @@ function renderTask(t) {
 }
 
 // ================= 导入记录（交互设计 2.3） =================
+// 注意：变量不能命名为 history，否则会遮蔽浏览器的 window.history
 let filter = '', page = 1, historyItems = [], historyTimer = null;
 function historyHas(id, statuses) { return historyItems.some(h => h.task_id === id && statuses.includes(h.status)); }
+/** 加载当前页的导入记录；列表中有进行中的任务时每 5 秒自动刷新。 */
 async function loadHistory() {
   clearTimeout(historyTimer);
   try {
@@ -288,11 +322,14 @@ async function loadHistory() {
     $('historyItems').innerHTML = `<tr><td colspan="7" class="muted" style="text-align:center">无法连接服务 <button class="btn" onclick="loadHistory()">重试</button></td></tr>`;
   }
 }
+/** 取已成功导入的文件名，选择同名文件时提示将覆盖。 */
 async function loadSucceededNames() {
   try { succeededNames = new Set((await api('/imports?page_size=100&status=succeeded')).items.map(x => x.file_name)); } catch (e) { /* 忽略 */ }
   refreshForm();
 }
+/** 在记录表中高亮右侧正在显示的任务。 */
 function highlightRow() { document.querySelectorAll('#historyItems tr').forEach(tr => tr.classList.toggle('on', tr.dataset.id === currentTaskId)); }
+// 事件委托：点击任意一行显示该任务
 $('historyItems').addEventListener('click', e => { const tr = e.target.closest('tr[data-id]'); if (tr) showTask(tr.dataset.id); });
 $('filters').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;

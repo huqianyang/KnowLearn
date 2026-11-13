@@ -8,10 +8,11 @@ from app.core.response import ok
 
 router = APIRouter(prefix="/api/v1", tags=["health"])
 
-CHECK_TIMEOUT = 3.0
+CHECK_TIMEOUT = 3.0   # 单个组件检查的超时时间（秒），避免某个中间件卡住导致整个接口无响应
 
 
 async def _check(fn) -> str:
+    """在线程中执行一个同步的 ping 函数，返回 "ok" 或可读的失败原因。"""
     try:
         await asyncio.wait_for(asyncio.to_thread(fn), timeout=CHECK_TIMEOUT)
         return "ok"
@@ -23,6 +24,8 @@ async def _check(fn) -> str:
 
 @router.get("/health")
 async def health(c: Container = Depends(get_container)):
+    """检查三个中间件和两个本机模型的状态。前端每 30 秒调用一次，用于页面顶部的状态提示。"""
+    # 三个中间件并行检查
     milvus, mongodb, minio = await asyncio.gather(
         _check(c.vectors.ping), _check(c.mongo.ping), _check(c.storage.ping))
     components = {

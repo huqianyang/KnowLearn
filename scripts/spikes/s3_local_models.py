@@ -8,11 +8,13 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 print("torch", torch.__version__, "cuda available:", torch.cuda.is_available())
+# 验证阶段允许回退到 CPU，用于确认环境；正式服务只用 GPU
 device = "cuda" if torch.cuda.is_available() else "cpu"
 fp16 = device == "cuda"
 
 from FlagEmbedding import BGEM3FlagModel, FlagReranker  # noqa: E402
 
+# 1. bge-m3：一个问题 + 一条相关文本 + 一条无关文本，比较余弦相似度
 t = time.time()
 emb = BGEM3FlagModel(os.environ["EMBEDDING_MODEL_PATH"], use_fp16=fp16, devices=device)
 print(f"bge-m3 loaded on {device} in {time.time() - t:.1f}s")
@@ -22,8 +24,10 @@ out = emb.encode(texts, batch_size=16, max_length=1024, return_dense=True, retur
 print(f"encode 3 texts: {time.time() - t:.2f}s; dense shape={out['dense_vecs'].shape}; "
       f"sparse sample={dict(list(out['lexical_weights'][0].items())[:3])}")
 d = out["dense_vecs"]
+# 向量已归一化，点积即余弦相似度
 print("cos(q, doc1)=%.3f  cos(q, doc2)=%.3f" % (float(d[0] @ d[1]), float(d[0] @ d[2])))
 
+# 2. reranker：同样的问题对，相关文本的分数应明显更高
 t = time.time()
 rr = FlagReranker(os.environ["RERANK_MODEL_PATH"], use_fp16=fp16, devices=device)
 print(f"reranker loaded in {time.time() - t:.1f}s")

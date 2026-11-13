@@ -16,11 +16,13 @@ FIX = Path(__file__).parent / "fixtures"
 
 @pytest.fixture(scope="module")
 def catalog():
+    """解析真实课程目录（整个模块只解析一次）。"""
     return parse_course_catalog((FIX / "course_catalog.md").read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")
 def questions(catalog):
+    """解析真实题库，课程归属来自上面的课程目录。"""
     return parse_question_bank((FIX / "question_bank.md").read_text(encoding="utf-8"),
                                direction_series_names(catalog))
 
@@ -28,12 +30,14 @@ def questions(catalog):
 # ---------------- 课程目录 ----------------
 
 def test_catalog_counts(catalog):
+    """219 个系列，三个级别各 73 个，每个系列 3 门子课程。"""
     assert len(catalog) == 219
     assert Counter(s.level for s in catalog) == {"foundation": 73, "practice": 73, "advanced": 73}
     assert all(len(s.sub_courses) == 3 for s in catalog)
 
 
 def test_catalog_fields_of_known_series(catalog):
+    """抽查一个系列的字段与原文一致。"""
     s = next(x for x in catalog if x.series_code == "general_purpose_programming_practice")
     assert s.name == "通用编程项目班"
     assert s.description == "计算机科学能力线 / 通用程序设计 / 通用编程项目班"
@@ -44,6 +48,7 @@ def test_catalog_fields_of_known_series(catalog):
 
 
 def test_catalog_derived_prerequisite(catalog):
+    """先修按同方向级别推导：入门班为「无」，项目班 → 入门班，强化班 → 项目班；全部都能推导出来。"""
     by = {s.series_code: s for s in catalog}
     assert by["general_purpose_programming_foundation"].prerequisite == "无"
     assert by["general_purpose_programming_practice"].prerequisite == "通用编程入门班"
@@ -52,6 +57,7 @@ def test_catalog_derived_prerequisite(catalog):
 
 
 def test_catalog_derived_project_practice(catalog):
+    """项目实战内容取名称含「项目 / 实战」的子课程，没有时为「资料未提供」。"""
     by = {s.series_code: s for s in catalog}
     assert by["general_purpose_programming_practice"].project_practice == "综合项目开发与讲评"
     # 入门班子课程都不含「项目/实战」
@@ -59,12 +65,14 @@ def test_catalog_derived_project_practice(catalog):
 
 
 def test_catalog_bank_name_matches_question_bank(catalog, questions):
+    """课程目录推导出的题库名与题库文件中的题库名一致。"""
     bank_names = {q.bank_code: q.bank_name for q in questions}
     for s in catalog:
         assert bank_names[s.bank_code] == s.bank_name
 
 
 def test_course_chunk_content(catalog):
+    """课程切片正文包含派生字段和子课程表格。"""
     s = next(x for x in catalog if x.series_code == "general_purpose_programming_practice")
     text = render_course(s)
     for expect in ("先修要求：通用编程入门班", "项目实战内容：综合项目开发与讲评", "关联题库：通用程序设计题库",
@@ -75,17 +83,20 @@ def test_course_chunk_content(catalog):
 
 
 def test_catalog_empty_grades_shown_as_not_provided(catalog):
+    """原文「适合年级」为空的 36 个系列显示为「资料未提供」。"""
     s = next(x for x in catalog if x.series_code == "first_line_management_foundation")
     assert s.grades == "资料未提供"
     assert sum(1 for x in catalog if x.grades == "资料未提供") == 36
 
 
 def test_catalog_rejects_wrong_file():
+    """不是课程目录的文件直接报错。"""
     with pytest.raises(ParseError, match="总数声明"):
         parse_course_catalog("# 随便一个文档\n内容")
 
 
 def test_catalog_count_mismatch():
+    """声明数量与实际解析数量不一致时报错。"""
     text = (FIX / "course_catalog.md").read_text(encoding="utf-8").replace("共 219 个", "共 220 个")
     with pytest.raises(ParseError, match="声明 220"):
         parse_course_catalog(text)
@@ -94,6 +105,7 @@ def test_catalog_count_mismatch():
 # ---------------- 题库 ----------------
 
 def test_question_counts(questions):
+    """1752 道题、73 个题库、15 种题型，主要题型数量正确。"""
     assert len(questions) == 1752
     assert len({q.bank_code for q in questions}) == 73
     types = Counter(q.question_type for q in questions)
@@ -102,6 +114,7 @@ def test_question_counts(questions):
 
 
 def test_question_known_item(questions):
+    """抽查一道单选题的全部字段和课程归属。"""
     q = next(x for x in questions if x.code == "general_purpose_programming_bank_q004")
     assert q.question_type == "单选题"
     assert q.stem == "关于函数参数传递，以下说法更准确的是哪一项？"
@@ -113,6 +126,7 @@ def test_question_known_item(questions):
 
 
 def test_question_multiline_with_code(questions):
+    """题干跨多行且包含代码块时完整保留。"""
     q = next(x for x in questions if x.code == "middle_high_school_informatics_bank_q001")
     assert q.question_type == "编程题"
     assert "```python" in q.stem and "print(x + y)" in q.stem
@@ -120,17 +134,20 @@ def test_question_multiline_with_code(questions):
 
 
 def test_question_reading_passage_multiline(questions):
+    """阅读理解题的长篇材料完整保留。"""
     q = next(x for x in questions if x.code == "postgraduate_english_bank_q001")
     assert "extended its opening hours" in q.stem and "What is the passage mainly about?" in q.stem
     assert len(q.options) == 4 and q.answer == "A"
 
 
 def test_options_present_exactly_when_declared(questions):
+    """有「选项」字段的题目数量与原文中「选项」出现次数一致。"""
     raw = (FIX / "question_bank.md").read_text(encoding="utf-8")
     assert sum(1 for q in questions if q.options) == raw.count("- **选项**")
 
 
 def test_question_chunk(questions):
+    """题目切片：正文含答案和解析，向量化文本不含答案。"""
     chunks = question_chunks(questions)
     c = next(x for x in chunks if x.question_code == "general_purpose_programming_bank_q004")
     assert c.content_type == "question" and c.question_type == "单选题"
@@ -142,6 +159,7 @@ def test_question_chunk(questions):
 
 
 def test_question_bank_requires_catalog():
+    """没有课程目录数据时，题库解析提示先导入课程目录。"""
     text = (FIX / "question_bank.md").read_text(encoding="utf-8")
     with pytest.raises(ParseError, match="请先导入课程目录"):
         parse_question_bank(text, {})
@@ -150,6 +168,7 @@ def test_question_bank_requires_catalog():
 # ---------------- Markdown 切分 ----------------
 
 def test_heading_path_uses_numbering_and_ignores_code_comments():
+    """章节路径按编号确定父子关系（编号跳级也能挂对）；代码块中的 # 不当作标题。"""
     md = """# 1 **概述**
 ## 1.1 **计算机的组成**
 ### 1.1.2 **硬件**
@@ -171,18 +190,21 @@ x = 1
 
 
 def test_unnumbered_heading_nests_under_current():
+    """无编号标题挂在当前编号标题之下，同级无编号标题互相替换。"""
     md = "# 1 环境\n## **Project venv:**\n内容A\n## **Base Conda:**\n内容B\n# 2 下一章\n内容C\n"
     chunks = split_markdown(md, "doc_chunk", course_name="Python", min_len=0)
     assert [c.chapter for c in chunks] == ["1 环境 > Project venv:", "1 环境 > Base Conda:", "2 下一章"]
 
 
 def test_year_in_title_is_not_numbering():
+    """「2023年」这类开头的数字不当作标题编号。"""
     md = "# 1 历史\n## 2023年发布的新版本\n内容\n# 2 下一章\n内容\n"
     chunks = split_markdown(md, "doc_chunk", min_len=0)
     assert chunks[0].chapter == "1 历史 > 2023年发布的新版本"
 
 
 def test_long_paragraph_split_by_sentence_with_overlap():
+    """超长段落按句子切分，每片不超过上限，相邻切片重叠 1 句。"""
     sentences = [f"这是第{i}句话，用来测试长段落按句子切分的效果。" for i in range(80)]
     md = "# 1 长文\n" + "".join(sentences) + "\n"
     chunks = split_markdown(md, "doc_chunk", max_len=300, min_len=0)
@@ -194,6 +216,7 @@ def test_long_paragraph_split_by_sentence_with_overlap():
 
 
 def test_code_block_and_table_not_split():
+    """超长的代码块和表格各自完整保留在一个切片中。"""
     code = "```python\n" + "\n".join(f"print({i})  # 第{i}行" for i in range(200)) + "\n```"
     table = "| a | b |\n| --- | --- |\n" + "\n".join(f"| {i} | {i * 2} |" for i in range(150))
     md = f"# 1 代码\n前言。\n\n{code}\n\n# 2 表格\n{table}\n"
@@ -205,6 +228,7 @@ def test_code_block_and_table_not_split():
 
 
 def test_small_sections_merged_within_same_top_chapter():
+    """短小节在同一顶级章节内合并，并保留子章节标题；不同顶级章节不合并。"""
     md = "# 1 A\n## 1.1 x\n短内容一。\n## 1.2 y\n短内容二。\n# 2 B\n## 2.1 z\n短内容三。\n"
     chunks = split_markdown(md, "doc_chunk", min_len=500)
     assert len(chunks) == 2
@@ -213,6 +237,7 @@ def test_small_sections_merged_within_same_top_chapter():
 
 
 def test_images_extracted():
+    """图片抽取到 images，正文中替换为「[图片：摘要]」。"""
     md = "# 1 图\n见下图：\n![Swagger 接口文档页面](http://h/knowlearn/a.jpg)\n说明文字。\n"
     c = split_markdown(md, "doc_chunk", min_len=0)[0]
     assert c.images[0].url == "http://h/knowlearn/a.jpg" and c.images[0].caption == "Swagger 接口文档页面"
@@ -221,6 +246,7 @@ def test_images_extracted():
 
 @pytest.mark.parametrize("name", ["mineru_fastapi_full.md", "mineru_python_full.md"])
 def test_real_mineru_output(name):
+    """用 MinerU 的真实转换结果整体检查切分质量。"""
     md = (FIX / name).read_text(encoding="utf-8")
     chunks = split_markdown(md, "doc_chunk", course_name="X")
     assert len(chunks) > 10
@@ -249,8 +275,10 @@ def test_real_mineru_output(name):
     ("readme.PDF", "project_doc", "project_name", "readme"),
 ])
 def test_suggest_name(filename, doc_type, key, expected):
+    """去掉固定前缀、版本号和扩展名，得到默认名称。"""
     assert suggest_name(filename, doc_type)[key] == expected
 
 
 def test_suggest_name_for_structured_types():
+    """课程目录、题库不需要名称。"""
     assert suggest_name("课程介绍.md", "course_catalog") == {"course_name": None, "project_name": None}

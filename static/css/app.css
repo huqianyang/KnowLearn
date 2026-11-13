@@ -1,4 +1,6 @@
 /* KnowLearn 公共样式（来自已通过评审的原型） */
+
+/* 设计变量：颜色、圆角。-soft 为对应颜色的浅色背景 */
 :root {
   --bg: #f5f7fa; --panel: #ffffff; --line: #e4e8ee; --text: #1f2937; --muted: #6b7280;
   --primary: #2563eb; --primary-soft: #eaf1ff;
@@ -6,6 +8,8 @@
   --err: #dc2626; --err-soft: #fdecec; --web: #7c3aed; --web-soft: #f3edff;
   --radius: 10px;
 }
+
+/* 基础样式 */
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }   /* 防止 display:flex 等类样式覆盖 hidden 属性 */
 html, body { margin: 0; height: 100%; }
@@ -14,6 +18,7 @@ a { color: var(--primary); text-decoration: none; }
 button { font: inherit; cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 
+/* 顶栏：品牌、页面导航、服务状态 */
 .topbar { height: 56px; display: flex; align-items: center; gap: 32px; padding: 0 24px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .brand { font-weight: 700; font-size: 17px; }
 .brand span { color: var(--primary); }
@@ -25,11 +30,13 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .health.ok { color: var(--ok); } .health.degraded { color: var(--warn); } .health.down { color: var(--err); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; }
 
+/* 通用组件：卡片、按钮、状态标签、表单 */
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
 .card h2 { margin: 0 0 16px; font-size: 16px; }
 .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 7px 16px; }
 .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
 .btn-text { border: none; background: none; color: var(--muted); padding: 4px 6px; }
+/* 标签颜色：ok 成功、run 进行中、err 失败、wait 等待、web 网络来源 */
 .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: #eef1f5; color: var(--muted); white-space: nowrap; }
 .tag.ok { background: var(--ok-soft); color: var(--ok); } .tag.run { background: var(--primary-soft); color: var(--primary); }
 .tag.err { background: var(--err-soft); color: var(--err); } .tag.wait { background: #eef1f5; color: var(--muted); }
@@ -43,6 +50,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
 .error-text { font-size: 12px; color: var(--err); margin-top: 4px; }
 
+/* 轻提示：顶部居中，淡入淡出（common.js 的 toast 函数控制） */
 .toast { position: fixed; top: 68px; left: 50%; transform: translateX(-50%); z-index: 100; padding: 8px 16px; border-radius: 8px; background: #1f2937; color: #fff; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.15); opacity: 0; transition: opacity .2s; pointer-events: none; }
 .toast.show { opacity: 1; }
 .toast.err { background: var(--err); }

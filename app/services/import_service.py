@@ -18,6 +18,7 @@ from app.pipelines.importing.tracker import initial_steps
 logger = logging.getLogger(__name__)
 
 DOC_TYPES = ("course_catalog", "question_bank", "lecture", "project_doc")
+# 各资料类型允许的文件格式：课程目录和题库只能是 md（需要按固定结构解析）
 ALLOWED_EXT = {
     "course_catalog": {".md"},
     "question_bank": {".md"},
@@ -28,6 +29,14 @@ TASK_STATUSES = {"pending", "running", "succeeded", "failed"}
 
 
 class ImportService:
+    """导入相关接口的业务逻辑。
+
+    Args:
+        settings: 配置（临时目录、上传上限）。
+        mongo: MongoDB。
+        on_created: 任务创建后的回调（通知后台线程立即领取）。
+    """
+
     def __init__(self, settings: Settings, mongo: Mongo, on_created=None):
         self.s = settings
         self.db = mongo.db
@@ -35,12 +44,18 @@ class ImportService:
 
     # ---------- A1 ----------
     def suggest(self, filename: str, doc_type: str) -> dict:
+        """根据文件名生成默认课程名 / 项目名。"""
         self._check_doc_type(doc_type)
         return suggest_name(filename, doc_type)
 
     # ---------- A2 ----------
     def create(self, file: UploadFile, doc_type: str, course_name: str | None, project_name: str | None) -> dict:
+        """校验参数、保存上传文件并创建 pending 任务。
+
+        同名文件已入库时标记为覆盖导入（沿用原 file_id），真正的替换在导入成功后进行。
+        """
         self._check_doc_type(doc_type)
+        # 只取文件名部分，防止上传的文件名中带路径
         filename = Path(file.filename or "").name
         ext = Path(filename).suffix.lower()
         if not filename or ext not in ALLOWED_EXT[doc_type]:
@@ -55,6 +70,7 @@ class ImportService:
         for v in (course_name, project_name):
             if v and len(v) > 100:
                 raise BizError(ErrorCode.INVALID_PARAM, "课程名 / 项目名不能超过 100 字")
+        # 只保留与资料类型对应的名称，忽略多传的字段
         if doc_type in ("course_catalog", "question_bank"):
             course_name = project_name = None
         elif doc_type == "lecture":
@@ -71,6 +87,7 @@ class ImportService:
             if ext == ".zip":
                 self._check_zip(upload_path)
         except BizError:
+            # 校验失败不创建任务，删除已保存的文件
             shutil.rmtree(task_dir, ignore_errors=True)
             raise
 
@@ -90,6 +107,7 @@ class ImportService:
                 "status": "pending", "is_overwrite": bool(existing)}
 
     def _save_limited(self, file: UploadFile, dest: Path) -> None:
+        """按 1MB 分块保存上传文件，超过大小上限立即中止，避免大文件占满磁盘。"""
         limit, size = self.s.max_upload_bytes, 0
         with open(dest, "wb") as out:
             while chunk := file.file.read(1024 * 1024):
@@ -102,6 +120,7 @@ class ImportService:
 
     @staticmethod
     def _check_zip(path: Path) -> None:
+        """提交时先检查压缩包：能正常打开，且恰好包含 1 个 .md 文件。"""
         try:
             with zipfile.ZipFile(path) as z:
                 mds = [n for n in z.namelist() if n.lower().endswith(".md") and "__MACOSX" not in n]
@@ -112,6 +131,7 @@ class ImportService:
 
     # ---------- A3 ----------
     def get(self, task_id: str) -> dict:
+        """任务详情（含步骤）。"""
         doc = self.db[IMPORT_TASKS].find_one({"_id": task_id})
         if not doc:
             raise BizError(ErrorCode.TASK_NOT_FOUND)
@@ -119,6 +139,7 @@ class ImportService:
 
     # ---------- A4 ----------
     def list_tasks(self, page: int, page_size: int, status: str | None) -> dict:
+        """任务列表（不含步骤），按创建时间倒序；status 可以是逗号分隔的多个状态。"""
         q: dict = {}
         if status:
             wanted = {x.strip() for x in status.split(",") if x.strip()}
@@ -132,20 +153,24 @@ class ImportService:
 
     @staticmethod
     def _check_doc_type(doc_type: str) -> None:
+        """资料类型必须是四种之一。"""
         if doc_type not in DOC_TYPES:
             raise BizError(ErrorCode.INVALID_PARAM, f"doc_type 只能是 {list(DOC_TYPES)}")
 
 
 def _iso(dt: datetime | None) -> str | None:
+    """转为本地时区的 ISO 字符串（精确到秒），供前端显示。"""
     return dt.astimezone().isoformat(timespec="seconds") if dt else None
 
 
 def to_task_view(d: dict, with_steps: bool) -> dict:
+    """把任务文档转换为接口返回结构，去掉 upload_path 等内部字段。"""
     view = {
         "task_id": d["_id"], "file_name": d["file_name"], "doc_type": d["doc_type"],
         "course_name": d.get("course_name"), "project_name": d.get("project_name"),
         "status": d["status"], "is_overwrite": d.get("is_overwrite", False),
         "created_at": _iso(d.get("created_at")), "finished_at": _iso(d.get("finished_at")),
+        # 总耗时 = 结束时间 - 开始执行时间（不含排队时间）
         "duration_ms": int((d["finished_at"] - d["started_at"]).total_seconds() * 1000)
         if d.get("finished_at") and d.get("started_at") else None,
         "error": d.get("error"), "stats": d.get("stats") or {},

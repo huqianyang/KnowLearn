@@ -6,22 +6,27 @@
 import re
 from dataclasses import dataclass
 
+# ![alt](src) 或 ![alt](<src> "title")
 _RE_MD_IMG = re.compile(r"!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+# <img ... src="..." ...>
 _RE_HTML_IMG = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"'][^>]*>", re.I)
-CONTEXT_CHARS = 200
+CONTEXT_CHARS = 200   # 给视觉模型的上下文：图片前后各取多少字
 
 
 @dataclass
 class ImageRefSpan:
-    start: int
-    end: int
-    src: str
-    alt: str
+    """一处图片引用在原文中的位置。"""
+
+    start: int   # 起始字符位置（含）
+    end: int     # 结束字符位置（不含）
+    src: str     # 图片地址（相对路径或 URL）
+    alt: str     # 原有的替代文字；HTML 写法为空
 
 
 def find_image_refs(md: str) -> list[ImageRefSpan]:
+    """找出全部图片引用，按出现位置排序。"""
     refs: list[ImageRefSpan] = []
-    pos = 0
+    pos = 0          # 当前行在全文中的起始位置
     in_fence = False
     for line in md.splitlines(keepends=True):
         if line.strip().startswith("```"):
@@ -41,6 +46,7 @@ def context_of(md: str, ref: ImageRefSpan, chars: int = CONTEXT_CHARS) -> tuple[
         s = _RE_MD_IMG.sub("", s)
         s = _RE_HTML_IMG.sub("", s)
         return re.sub(r"\s+", " ", s).strip()
+    # 先多取一倍的原文，清理后再截取 chars 字，保证清理掉图片和空白后仍有足够上下文
     return clean(md[max(0, ref.start - chars * 2):ref.start])[-chars:], clean(md[ref.end:ref.end + chars * 2])[:chars]
 
 

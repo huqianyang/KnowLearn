@@ -20,14 +20,16 @@ from app.services.session_service import SessionService, message_view
 
 logger = logging.getLogger(__name__)
 
-_END = "__end__"
+_END = "__end__"   # 内部结束标记：工作线程全部处理完毕（不推送给浏览器）
 
 
 def _sse(event: str, data: dict) -> str:
+    """按 SSE 格式拼一条事件：event 行 + data 行 + 空行。"""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _classify(e: Exception) -> tuple[int, str]:
+    """把异常归类为对用户友好的错误码和提示（不暴露内部细节）。"""
     if isinstance(e, (APIConnectionError, APITimeoutError, APIStatusError)):
         return ErrorCode.DEPENDENCY_UNAVAILABLE.code, "模型服务暂时不可用，请稍后重试"
     if isinstance(e, MilvusException):
@@ -36,6 +38,14 @@ def _classify(e: Exception) -> tuple[int, str]:
 
 
 class ChatService:
+    """问答服务。
+
+    Args:
+        sessions: 会话服务（锁、历史、消息存取）。
+        pipeline: 问答图。
+        history_rounds: 带入的历史轮数。
+    """
+
     def __init__(self, sessions: SessionService, pipeline: QueryPipeline, history_rounds: int):
         self.sessions = sessions
         self.pipeline = pipeline
@@ -45,8 +55,10 @@ class ChatService:
         """校验并抢占会话锁、保存用户消息，然后在后台线程运行问答图。返回取消信号。"""
         session = self.sessions.acquire(session_id)
         try:
+            # 先取历史再保存本轮问题，历史中不包含本轮
             history = self.sessions.history(session_id, self.history_rounds)
             now = datetime.now(timezone.utc)
+            # 会话的第一个问题同时作为会话标题
             self.sessions.add_message({"_id": uuid.uuid4().hex, "session_id": session_id, "role": "user",
                                        "content": query, "status": "completed", "created_at": now},
                                       first_question=query if session.get("message_count", 0) == 0 else None)
@@ -54,9 +66,10 @@ class ChatService:
             self.sessions.release(session_id)
             raise
 
-        buffer: list[str] = []
+        buffer: list[str] = []   # 已生成的文本，中断时用它保存部分答案
 
         def emit(event: str, data: dict) -> None:
+            """在工作线程中调用：把事件安全地放进事件循环所在线程的队列。"""
             if event == "delta":
                 buffer.append(data["text"])
             loop.call_soon_threadsafe(queue.put_nowait, (event, data))
@@ -68,6 +81,10 @@ class ChatService:
 
     def _work(self, session_id: str, query: str, history: list[dict], ctx: QueryContext,
               buffer: list[str], user_time: datetime) -> None:
+        """工作线程主体：运行问答图，结束后无论成败都保存助手消息并释放会话锁。
+
+        消息状态：completed（正常完成）/ interrupted（用户停止）/ failed（出错）。
+        """
         msg_id = uuid.uuid4().hex
         state: dict = {}
         status, error = "completed", None
@@ -78,10 +95,12 @@ class ChatService:
         except Exception as e:  # noqa: BLE001
             code, msg = _classify(e)
             logger.exception("[%s] 问答失败", session_id)
+            # 用户已经停止时出现的异常不算失败
             status, error = ("interrupted", None) if ctx.cancel.is_set() else ("failed", msg)
             if status == "failed":
                 ctx.emit("error", {"code": code, "message": msg})
         finally:
+            # 正常完成用最终答案；中断或失败时用已推送的部分文本
             content = state.get("answer") if status == "completed" else "".join(buffer)
             doc = {"_id": msg_id, "session_id": session_id, "role": "assistant", "content": content or "",
                    "rewritten_query": state.get("rewritten_query"), "sources": state.get("sources") or [],
@@ -98,6 +117,7 @@ class ChatService:
             logger.info("[%s] 问答结束 status=%s timings=%s", session_id, status, ctx.timings)
             if status != "failed":
                 ctx.emit("done", {"message_id": msg_id, "content": doc["content"]})
+            # 结束标记携带完整消息，供非流式接口直接返回
             ctx.emit(_END, {"message": message_view(doc)})
 
     # ---------------- 流式 ----------------
@@ -109,6 +129,7 @@ class ChatService:
         cancel = await asyncio.to_thread(self._start, session_id, query, loop, queue)
 
         async def gen():
+            """从队列取事件并输出 SSE 文本，直到收到结束标记。"""
             finished = False
             try:
                 while True:
@@ -118,6 +139,7 @@ class ChatService:
                         return
                     yield _sse(event, data)
             finally:
+                # 没收到结束标记就退出，说明浏览器断开了连接（框架会关闭生成器）
                 if not finished:          # 客户端断开（停止生成 / 关闭页面）
                     cancel.set()
                     logger.info("[%s] 客户端断开，停止生成", session_id)
@@ -126,6 +148,7 @@ class ChatService:
     # ---------------- 非流式 ----------------
 
     async def complete(self, session_id: str, query: str) -> dict:
+        """非流式：等待结束标记，返回完整的助手消息；出错时抛出业务异常。"""
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
         await asyncio.to_thread(self._start, session_id, query, loop, queue)

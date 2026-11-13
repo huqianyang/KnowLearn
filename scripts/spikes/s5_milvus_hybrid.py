@@ -11,12 +11,13 @@ from dotenv import load_dotenv
 from pymilvus import AnnSearchRequest, DataType, MilvusClient, RRFRanker
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-COLL = f"knowlearn_spike_{int(time.time())}"
+COLL = f"knowlearn_spike_{int(time.time())}"   # 临时集合名带时间戳，不影响已有集合
 DIM = 1024
 
 client = MilvusClient(uri=os.environ["MILVUS_URI"])
 print("server version:", client.get_server_version())
 
+# 1. 按数据库设计建表（只保留验证需要的字段）
 schema = client.create_schema(auto_id=False, enable_dynamic_field=False)
 schema.add_field("chunk_id", DataType.VARCHAR, max_length=64, is_primary=True)
 schema.add_field("content_type", DataType.VARCHAR, max_length=32)
@@ -38,11 +39,14 @@ for f in ("content_type", "question_type", "file_name", "task_id"):
 client.create_collection(COLL, schema=schema, index_params=idx, consistency_level="Strong")
 print("created", COLL)
 try:
-    rnd = random.Random(0)
+    rnd = random.Random(0)   # 固定随机种子，结果可复现
+
     def vec():
+        """随机生成一个归一化的稠密向量。"""
         v = [rnd.random() for _ in range(DIM)]
         n = sum(x * x for x in v) ** 0.5
         return [x / n for x in v]
+    # 2. 写入 5 条测试数据：3 道不同题型的题目 + 1 条课程介绍 + 1 条讲义片段（前 4 条属于任务 t1，最后 1 条属于 t2）
     rows = []
     for i, (ct, qt) in enumerate([("question", "单选题"), ("question", "多选题"), ("question", "判断题"),
                                   ("course_intro", None), ("doc_chunk", None)]):
@@ -54,6 +58,7 @@ try:
     print("insert:", client.insert(COLL, rows)["insert_count"])
     client.load_collection(COLL)
 
+    # 3. 混合检索 + 标量过滤：只应返回单选题和多选题
     q_dense, q_sparse = rows[0]["dense_vector"], rows[0]["sparse_vector"]
     flt = 'content_type == "question" and question_type in ["单选题", "多选题"]'
     reqs = [AnnSearchRequest([q_dense], "dense_vector", {"metric_type": "COSINE", "params": {"ef": 64}}, limit=10, expr=flt),
@@ -72,5 +77,6 @@ try:
     assert all(r["task_id"] == "t2" for r in left)
     print("S5 PASS")
 finally:
+    # 无论成功与否都删除临时集合
     client.drop_collection(COLL)
     print("dropped", COLL)

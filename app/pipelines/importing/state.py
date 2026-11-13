@@ -1,4 +1,8 @@
-"""导入图状态。"""
+"""导入图状态。
+
+LangGraph 在节点之间传递这个字典：每个节点读取需要的字段，返回的字段合并进状态。
+total=False 表示所有字段都可以暂时缺省（后面的字段由节点逐步填入）。
+"""
 from pathlib import Path
 from typing import TypedDict
 
@@ -6,6 +10,8 @@ from app.parsers.models import Chunk
 
 
 class ImportState(TypedDict, total=False):
+    """导入图在节点之间传递的状态。"""
+
     # 任务信息（由工作线程填入）
     task_id: str
     file_id: str
