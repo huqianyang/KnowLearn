@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from fastapi import Request
 
 from app.core.config import Settings
+from app.core.files import sweep_temp_dir
 from app.infra.llm import LlmClient
 from app.infra.local_models import LocalModels
 from app.infra.mineru import MinerUClient
@@ -66,9 +67,12 @@ class Container:
         """初始化顺序：先连中间件并建好结构，再加载模型，最后启动导入线程。任何一步失败都让启动失败。"""
         self.mongo.ping()
         self.mongo.ensure_indexes()
-        self.mongo.recover_interrupted_tasks()   # 上次进程退出时还在执行的任务标记为失败
+        interrupted = self.mongo.recover_interrupted_tasks()   # 上次进程退出时还在执行的任务标记为失败
         self.storage.ensure_bucket()
         self.vectors.ensure_collection()
+        # 清理中断任务写入的残留切片和文件；此时没有任务在执行，临时目录可以整体清扫
+        self.import_worker.pipeline.cleanup_interrupted(interrupted)
+        sweep_temp_dir(self.settings.temp_dir, keep=set())
         self.models.load()
         self.settings.temp_dir.mkdir(parents=True, exist_ok=True)
         self.import_worker.start()

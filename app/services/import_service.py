@@ -1,6 +1,5 @@
 """导入服务：参数校验、保存上传文件、创建任务、查询任务（API A1～A4）。"""
 import logging
-import shutil
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -11,7 +10,10 @@ from pymongo import DESCENDING
 
 from app.core.config import Settings
 from app.core.errors import BizError, ErrorCode
+from app.core.files import remove_tree
 from app.infra.mongo import IMPORT_TASKS, KB_FILES, Mongo
+from app.infra.storage import build_public_url
+from app.infra.vector_store import VARCHAR_LIMITS, utf8_len
 from app.parsers.filename import suggest_name
 from app.pipelines.importing.tracker import initial_steps
 
@@ -70,6 +72,10 @@ class ImportService:
         for v in (course_name, project_name):
             if v and len(v) > 100:
                 raise BizError(ErrorCode.INVALID_PARAM, "课程名 / 项目名不能超过 100 字")
+        # Milvus 按 UTF-8 字节限制长度（汉字 3 字节）：项目名 256 字节 ≈ 85 个汉字
+        if project_name and utf8_len(project_name) > VARCHAR_LIMITS["project_name"]:
+            raise BizError(ErrorCode.INVALID_PARAM, "项目名过长：最多约 85 个汉字（或 256 个英文字符）")
+        self._check_filename_length(filename)
         # 只保留与资料类型对应的名称，忽略多传的字段
         if doc_type in ("course_catalog", "question_bank"):
             course_name = project_name = None
@@ -88,7 +94,7 @@ class ImportService:
                 self._check_zip(upload_path)
         except BizError:
             # 校验失败不创建任务，删除已保存的文件
-            shutil.rmtree(task_dir, ignore_errors=True)
+            remove_tree(task_dir)
             raise
 
         existing = self.db[KB_FILES].find_one({"file_name": filename}, {"_id": 1})
@@ -105,6 +111,16 @@ class ImportService:
         self.on_created()
         return {"task_id": task_id, "file_name": filename, "doc_type": doc_type,
                 "status": "pending", "is_overwrite": bool(existing)}
+
+    def _check_filename_length(self, filename: str) -> None:
+        """文件名写入 Milvus 的 file_name（512 字节），并以 URL 编码形式出现在 file_url（1024 字节，汉字编码后占 9 字节）。
+
+        超限会让该文件的全部切片写入失败，因此在上传时就拦截。用最长的对象名（原文件 raw/）估算。
+        """
+        sample_key = f"files/{'0' * 32}/{'0' * 32}/raw/{filename}"
+        url = build_public_url(self.s.minio_public_base, self.s.minio_bucket, sample_key)
+        if utf8_len(filename) > VARCHAR_LIMITS["file_name"] or utf8_len(url) > VARCHAR_LIMITS["file_url"]:
+            raise BizError(ErrorCode.INVALID_PARAM, "文件名过长：请把文件名缩短到约 90 个汉字以内后重新上传")
 
     def _save_limited(self, file: UploadFile, dest: Path) -> None:
         """按 1MB 分块保存上传文件，超过大小上限立即中止，避免大文件占满磁盘。"""

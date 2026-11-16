@@ -56,8 +56,18 @@ class WebSearchClient:
             if not text:
                 continue
             data = json.loads(text)
-            pages += data.get("pages") or []
-        # 没有标题时用站点名或网址代替
-        return [{"title": p.get("title") or p.get("hostname") or p.get("url", ""),
-                 "url": p.get("url", ""), "snippet": (p.get("snippet") or "").strip()}
-                for p in pages if p.get("url")][:count]
+            if isinstance(data, dict) and isinstance(data.get("pages"), list):
+                pages += [p for p in data["pages"] if isinstance(p, dict)]
+        return normalize_pages(pages, count)
+
+
+def normalize_pages(pages: list[dict], count: int) -> list[dict]:
+    """整理搜索结果：只保留 http(s) 地址（javascript: 等地址会进入来源卡片的链接），没有标题时用站点名或网址代替。"""
+    out = []
+    for p in pages:
+        url = str(p.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        out.append({"title": str(p.get("title") or p.get("hostname") or url),
+                    "url": url, "snippet": str(p.get("snippet") or "").strip()})
+    return out[:count]

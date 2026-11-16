@@ -74,7 +74,7 @@ class LlmClient:
     # 问答链路不重试，保证速度（技术方案第 6 章）
 
     def complete(self, messages: list[dict], max_tokens: int = 800, temperature: float = 0.2,
-                 json_mode: bool = False) -> str:
+                 json_mode: bool = False, thinking: bool = False, timeout: float | None = None) -> str:
         """非流式对话，返回完整文本（用于问题改写、HyDE）。
 
         Args:
@@ -82,10 +82,15 @@ class LlmClient:
             max_tokens: 最大输出长度。
             temperature: 采样温度，越低越稳定。
             json_mode: True 时要求模型输出 JSON 对象。
+            thinking: 是否开启思考模式。硅基流动的 DeepSeek-V4-Flash 默认开启，实测 HyDE 会多出约 900 个
+                推理 token、耗时 12～19 秒（关闭后约 3 秒），且 max_tokens 限制不住推理部分，因此默认关闭。
+            timeout: 本次调用的超时时间（秒）；None 时使用客户端默认的 60 秒。
         """
-        kwargs: dict = {}
+        kwargs: dict = {"extra_body": {"enable_thinking": thinking}}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
         r = self.client.chat.completions.create(model=self.llm_model, messages=messages, max_tokens=max_tokens,
                                                 temperature=temperature, **kwargs)
         return (r.choices[0].message.content or "").strip()

@@ -38,22 +38,24 @@ class Mongo:
         db[MESSAGES].create_index([("session_id", ASCENDING), ("created_at", ASCENDING)])    # 按会话取消息
         logger.info("Mongo 索引已就绪（库 %s）", db.name)
 
-    def recover_interrupted_tasks(self) -> int:
+    def recover_interrupted_tasks(self) -> list[dict]:
         """服务重启时，把仍在 pending/running 的导入任务标记为失败；同时复位会话的生成锁。
 
         Returns:
-            被标记为失败的任务数。
+            被标记为失败的任务 [{_id, file_id}]，供调用方清理它们已写入的数据。
         """
         now = datetime.now(timezone.utc)
+        q = {"status": {"$in": ["pending", "running"]}}
+        tasks = list(self.db[IMPORT_TASKS].find(q, {"_id": 1, "file_id": 1}))
         res = self.db[IMPORT_TASKS].update_many(
-            {"status": {"$in": ["pending", "running"]}},
+            {"_id": {"$in": [t["_id"] for t in tasks]}},
             {"$set": {"status": "failed", "error": "服务重启，任务中断", "finished_at": now}},
         )
         # 进程退出时正在回答的会话，锁不会被释放，这里统一复位
         self.db[SESSIONS].update_many({"is_generating": True}, {"$set": {"is_generating": False}})
         if res.modified_count:
             logger.warning("已将 %d 个中断的导入任务标记为失败", res.modified_count)
-        return res.modified_count
+        return tasks
 
     def ping(self) -> None:
         """连通性检查，失败时抛出异常。"""

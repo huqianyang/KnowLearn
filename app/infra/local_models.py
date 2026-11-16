@@ -101,11 +101,45 @@ class LocalModels:
     RERANK_MAX_TOKENS = 512     # bge-reranker-large 的位置编码上限
 
     def rerank(self, query: str, passages: list[str], batch_size: int = 16) -> list[float]:
-        """返回 bge-reranker 原始 logit 分数（越大越相关）。"""
-        import torch
+        """返回 bge-reranker 原始 logit 分数（越大越相关）。
 
+        模型最多看 512 token，超长候选的尾部会被截掉（审计：6.7% 的切片超限，探针题证实尾部的答案会因此排不上来）。
+        超长候选额外用「第一行（所属 + 章节）+ 正文尾部」再打一次分，取两者的较高分。
+        """
         if not passages:
             return []
+        tails = self._tail_windows(query, passages)
+        scores = self._score(query, passages + [t for _, t in tails], batch_size)
+        out = scores[:len(passages)]
+        for (i, _), sc in zip(tails, scores[len(passages):]):
+            out[i] = max(out[i], sc)
+        return out
+
+    def _tail_windows(self, query: str, passages: list[str]) -> list[tuple[int, str]]:
+        """为超过 token 上限的候选生成尾部窗口：[(候选下标, 第一行 + 尾部文本)]。"""
+        tok = self._rr_tokenizer
+        # 问题 + 片段成对输入时有 4 个特殊 token
+        budget = self.RERANK_MAX_TOKENS - len(tok(query, add_special_tokens=False)["input_ids"]) - 4
+        out = []
+        for i, p in enumerate(passages):
+            enc = tok(p, add_special_tokens=False, return_offsets_mapping=True)
+            n = len(enc["input_ids"])
+            if n <= budget:
+                continue
+            head, _, body = p.partition("\n")
+            room = budget - len(tok(head + "\n", add_special_tokens=False)["input_ids"]) - 2   # 留 2 个余量
+            if room <= 0 or not body:
+                continue
+            start = enc["offset_mapping"][n - room][0]
+            if start <= len(head):
+                continue
+            out.append((i, f"{head}\n{p[start:]}"))
+        return out
+
+    def _score(self, query: str, passages: list[str], batch_size: int) -> list[float]:
+        """成对打分；超长文本只截断候选，保留完整问题。"""
+        import torch
+
         scores: list[float] = []
         with self.lock, torch.inference_mode():
             for i in range(0, len(passages), batch_size):

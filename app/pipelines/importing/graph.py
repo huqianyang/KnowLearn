@@ -6,7 +6,6 @@
 import hashlib
 import logging
 import mimetypes
-import shutil
 import time
 import uuid
 import zipfile
@@ -19,12 +18,13 @@ from langgraph.graph import END, START, StateGraph
 from pypdf import PdfReader
 
 from app.core.config import Settings
+from app.core.files import remove_tree
 from app.infra.llm import LlmClient
 from app.infra.local_models import LocalModels
 from app.infra.mineru import MinerUClient, safe_extract
 from app.infra.mongo import IMPORT_TASKS, KB_FILES, Mongo
 from app.infra.storage import Storage
-from app.infra.vector_store import VectorStore, quote
+from app.infra.vector_store import VectorStore, fit_row, quote
 from app.parsers.course_catalog import LEVELS, course_chunks, parse_course_catalog
 from app.parsers.image_refs import context_of, find_image_refs, replace_refs, safe_caption
 from app.parsers.markdown_splitter import split_markdown
@@ -117,15 +117,43 @@ class ImportPipeline:
             tasks.update_one({"_id": task_id}, {"$set": {"status": "failed", "error": msg, "finished_at": _now()}})
             self._cleanup_failed(task_id, task["file_id"])
         finally:
-            shutil.rmtree(work_dir, ignore_errors=True)
+            remove_tree(work_dir)
 
     def _cleanup_failed(self, task_id: str, file_id: str) -> None:
-        """失败时删除本任务已写入的数据，旧版本保持不变。"""
+        """失败时删除本任务已写入的数据，旧版本保持不变。Milvus 与 MinIO 分别清理，一边出错不影响另一边。
+
+        如果本任务已经成为生效版本（提交点之后才出错，如更新任务状态失败），数据是有效的，不能删。
+        """
+        try:
+            if self.d.mongo.db[KB_FILES].find_one({"active_task_id": task_id}, {"_id": 1}):
+                logger.warning("[%s] 任务已切换为生效版本，保留已写入的数据", task_id)
+                return
+        except Exception:  # noqa: BLE001 —— 无法确认时宁可不删，避免误删生效数据
+            logger.exception("[%s] 无法确认任务是否已生效，跳过清理", task_id)
+            return
         try:
             self.d.vectors.delete(f"task_id == {quote(task_id)}")
+        except Exception:  # noqa: BLE001
+            logger.exception("[%s] 失败清理 Milvus 出错", task_id)
+        try:
             self.d.storage.delete_prefix(object_prefix(file_id, task_id))
         except Exception:  # noqa: BLE001
-            logger.exception("[%s] 失败清理出错", task_id)
+            logger.exception("[%s] 失败清理 MinIO 出错", task_id)
+
+    def cleanup_interrupted(self, tasks: list[dict]) -> int:
+        """服务启动时清理上次被中断的任务已写入的数据（如在写入知识库中途被杀，切片会残留并能被检索到）。
+
+        已切换为生效版本的任务（kb_files.active_task_id 指向它）不清理。返回清理的任务数。
+        """
+        n = 0
+        for t in tasks:
+            if self.d.mongo.db[KB_FILES].find_one({"active_task_id": t["_id"]}, {"_id": 1}):
+                continue
+            self._cleanup_failed(t["_id"], t["file_id"])
+            n += 1
+        if n:
+            logger.warning("启动清理：已删除 %d 个中断任务写入的数据", n)
+        return n
 
     # ---------------- 节点 ----------------
     # 每个节点接收当前状态，返回需要合并进状态的字段
@@ -314,6 +342,12 @@ class ImportPipeline:
                 "task_id": s["task_id"], "created_at": now_ms,
                 "dense_vector": dv, "sparse_vector": sv or {0: 1e-6},   # Milvus 不接受空稀疏向量
             })
+        # Milvus 按 UTF-8 字节限制 VARCHAR，一行超限会让整批失败：可截断的字段按字节截断，其余字段报可读的错误
+        over: set[str] = set()
+        for r in rows:
+            over.update(fit_row(r))
+        if over:
+            raise ImportFailed(f"字段超过长度上限：{', '.join(sorted(over))}（文件名请缩短到约 90 个汉字以内）")
         self.d.vectors.insert(rows)
         self._activate(s, len(rows))
         t.done("store")
@@ -333,14 +367,23 @@ class ImportPipeline:
              "$setOnInsert": {"_id": s["file_id"], "created_at": now}},
             upsert=True,
         )
-        # 删除同名文件其他任务写入的切片（即旧版本）
-        removed = self.d.vectors.delete(f"file_name == {quote(s['file_name'])} and task_id != {quote(s['task_id'])}")
+        # —— 到这里新版本已经生效（提交点）。之后删除旧版本都是「尽力而为」：出错只记日志、不抛异常。
+        # 否则 run() 会把本任务当作失败并删除新版本，而旧版本已被删掉，整份资料就没了（审计 C2 实测）。
+        # 删除失败残留的旧切片，会在该文件下次导入成功时按「task_id != 生效任务」一并删除。
+        try:
+            removed = self.d.vectors.delete(
+                f"file_name == {quote(s['file_name'])} and task_id != {quote(s['task_id'])}")
+            if removed:
+                logger.info("[%s] 覆盖导入：删除旧版本 %d 条", s["task_id"], removed)
+        except Exception:  # noqa: BLE001
+            logger.exception("[%s] 删除旧版本切片失败（新版本已生效，旧切片待下次导入时清理）", s["task_id"])
         # 删除旧版本在 MinIO 中的文件；旧任务的 file_id 取自其任务记录，取不到时用登记记录的 _id
         if old and old.get("active_task_id") and old["active_task_id"] != s["task_id"]:
-            old_task = db[IMPORT_TASKS].find_one({"_id": old["active_task_id"]}, {"file_id": 1}) or {}
-            self.d.storage.delete_prefix(object_prefix(old_task.get("file_id", old["_id"]), old["active_task_id"]))
-        if removed:
-            logger.info("[%s] 覆盖导入：删除旧版本 %d 条", s["task_id"], removed)
+            try:
+                old_task = db[IMPORT_TASKS].find_one({"_id": old["active_task_id"]}, {"file_id": 1}) or {}
+                self.d.storage.delete_prefix(object_prefix(old_task.get("file_id", old["_id"]), old["active_task_id"]))
+            except Exception:  # noqa: BLE001
+                logger.exception("[%s] 删除旧版本文件失败（新版本已生效，不影响使用）", s["task_id"])
 
 
 def _now() -> datetime:

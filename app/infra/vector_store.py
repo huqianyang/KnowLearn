@@ -32,6 +32,35 @@ _SCALAR_FIELDS: list[tuple[str, DataType, dict]] = [
 # 需要建倒排索引的字段：常用作过滤条件，或按文件 / 任务批量删除
 _INVERTED_FIELDS = ["content_type", "question_type", "direction_code", "file_name", "task_id"]
 REQUIRED_FIELDS = {"chunk_id", "dense_vector", "sparse_vector"} | {f[0] for f in _SCALAR_FIELDS}
+# VARCHAR 字段上限。注意 Milvus 按 UTF-8 字节计（汉字 3 字节），不是按字符计；
+# 一行超限会让整批写入失败（审计 A1 实测）
+VARCHAR_LIMITS = {name: kw["max_length"] for name, dtype, kw in _SCALAR_FIELDS if dtype == DataType.VARCHAR}
+# 写入前可以安全截断的字段（只影响展示和过滤，不影响定位数据）；其余字段超限时报错
+TRUNCATABLE_FIELDS = ("course_name", "project_name", "chapter", "bank_name", "question_type")
+
+
+def utf8_len(s: str | None) -> int:
+    """字符串的 UTF-8 字节数。"""
+    return len((s or "").encode("utf-8"))
+
+
+def truncate_utf8(s: str, max_bytes: int) -> str:
+    """按 UTF-8 字节截断，不会切出半个汉字。"""
+    b = s.encode("utf-8")
+    return s if len(b) <= max_bytes else b[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def fit_row(row: dict) -> list[str]:
+    """写入前把可截断字段截到字节上限内（原地修改），返回仍然超限、无法截断的字段名。"""
+    over = []
+    for name, limit in VARCHAR_LIMITS.items():
+        v = row.get(name)
+        if isinstance(v, str) and utf8_len(v) > limit:
+            if name in TRUNCATABLE_FIELDS:
+                row[name] = truncate_utf8(v, limit)
+            else:
+                over.append(name)
+    return over
 OUTPUT_FIELDS = [f[0] for f in _SCALAR_FIELDS]   # 检索时返回的字段（不返回向量）
 
 
@@ -117,6 +146,18 @@ class VectorStore:
         return self.client.query(self.collection, filter=expr, output_fields=fields, limit=limit)
 
     # ---------------- 检索（M4） ----------------
+
+    def get_by_question_codes(self, codes: list[str]) -> list[dict]:
+        """按题号精确取题目切片（题号不在向量化文本中，向量检索找不到）。返回结构与检索结果相同。"""
+        if not codes:
+            return []
+        expr = f'content_type == "question" and question_code in [{", ".join(quote(c) for c in codes)}]'
+        rows = self.client.query(self.collection, filter=expr, output_fields=["chunk_id", *OUTPUT_FIELDS],
+                                 limit=len(codes) * 2)
+        order = {c: i for i, c in enumerate(codes)}
+        rows.sort(key=lambda r: order.get(r.get("question_code"), len(codes)))
+        # exact_match：问答链路据此把精确命中的题目直接放进上下文，不受重排阈值影响
+        return [{**r, "score": 1.0, "exact_match": True} for r in rows]
 
     def hybrid_search(self, dense: list[float], sparse: dict[int, float], expr: str = "", limit: int = 10) -> list[dict]:
         """稠密 + 稀疏两路检索，Milvus 内部 RRF 融合（技术方案 5.2 kb_search）。"""

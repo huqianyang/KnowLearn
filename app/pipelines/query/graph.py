@@ -28,6 +28,8 @@ KB_LIMIT = 10              # 知识库混合检索召回条数
 HYDE_LIMIT = 10            # HyDE 检索召回条数
 WEB_COUNT = 5              # 联网搜索结果条数
 HISTORY_CHARS = 1500       # 每条历史消息带入提示词的最大长度
+REWRITE_TIMEOUT = 8.0      # 改写超时（秒）：超时即用原问题继续，避免用户等满 SDK 默认的 60 秒
+HYDE_TIMEOUT = 10.0        # HyDE 生成超时（秒）：超时只跳过 HyDE 这一路
 
 
 @dataclass
@@ -115,11 +117,15 @@ class QueryPipeline:
         user = f"【对话历史】\n{hist or '（无）'}\n\n【最新问题】\n{s['query']}"
         try:
             raw = self.llm.complete([{"role": "system", "content": REWRITE_SYSTEM}, {"role": "user", "content": user}],
-                                    max_tokens=300, temperature=0.0, json_mode=True)
+                                    max_tokens=300, temperature=0.0, json_mode=True, timeout=REWRITE_TIMEOUT)
         except Exception as e:  # noqa: BLE001 —— 改写失败不影响问答
             logger.warning("问题改写失败，使用原问题：%s", e)
             raw = ""
-        r = ranking.parse_rewrite(raw, s["query"])
+        try:
+            r = ranking.parse_rewrite(raw, s["query"])
+        except Exception:  # noqa: BLE001 —— parse_rewrite 已做类型校验，这里兜底保证问答不中断
+            logger.exception("改写结果解析异常，使用原问题")
+            r = {"rewritten_query": s["query"], "content_types": [], "question_types": []}
         logger.info("改写：%s → %s | 类型=%s 题型=%s", s["query"], r["rewritten_query"], r["content_types"], r["question_types"])
         ctx.emit("progress", {"stage": "retrieve", "message": "正在检索知识库和网络…"})
         return r
@@ -131,22 +137,33 @@ class QueryPipeline:
         hits = self.vectors.hybrid_search(enc.dense[0], enc.sparse[0], expr, KB_LIMIT)
         if not hits and expr:      # 过滤过严时放宽一次，避免因意图识别偏差漏掉资料
             hits = self.vectors.hybrid_search(enc.dense[0], enc.sparse[0], "", KB_LIMIT)
+        # 题号（如 general_purpose_programming_bank_q021）不在向量化文本中，向量检索找不到，
+        # 这里按标量字段精确查询，并排在最前面
+        codes = ranking.find_question_codes(f"{s['query']} {s['rewritten_query']}")
+        if codes:
+            exact = self.vectors.get_by_question_codes(codes)
+            seen = {h["chunk_id"] for h in exact}
+            hits = exact + [h for h in hits if h["chunk_id"] not in seen]
         return {"kb_hits": hits}
 
     def _hyde_search(self, s: QueryState, ctx: QueryContext) -> dict:
-        """HyDE 检索：先生成一段假设答案，再用它的稠密向量检索。生成失败时跳过这一路。"""
+        """HyDE 检索：先生成一段假设答案，再用它的稠密向量检索。
+
+        HyDE 只是补充召回：生成、向量化、检索任何一步失败都只跳过这一路，不影响知识库检索。
+        """
         try:
             doc = self.llm.complete([{"role": "system", "content": HYDE_SYSTEM},
-                                     {"role": "user", "content": s["rewritten_query"]}], max_tokens=250)
+                                     {"role": "user", "content": s["rewritten_query"]}],
+                                    max_tokens=300, timeout=HYDE_TIMEOUT)
+            enc = self.models.encode([doc])
+            # 与知识库检索使用同一过滤条件；没识别出类型时不过滤，过严时同样放宽一次
+            expr = ranking.build_filter(s["content_types"], s["question_types"])
+            hits = self.vectors.dense_search(enc.dense[0], expr, HYDE_LIMIT)
+            if not hits and expr:
+                hits = self.vectors.dense_search(enc.dense[0], "", HYDE_LIMIT)
         except Exception as e:  # noqa: BLE001
-            logger.warning("HyDE 生成失败，跳过该路：%s", e)
+            logger.warning("HyDE 检索失败，跳过该路：%s", e)
             return {"hyde_hits": []}
-        enc = self.models.encode([doc])
-        # 与知识库检索使用同一过滤条件；没识别出类型时不过滤，过严时同样放宽一次
-        expr = ranking.build_filter(s["content_types"], s["question_types"])
-        hits = self.vectors.dense_search(enc.dense[0], expr, HYDE_LIMIT)
-        if not hits and expr:
-            hits = self.vectors.dense_search(enc.dense[0], "", HYDE_LIMIT)
         return {"hyde_hits": hits}
 
     def _web_search(self, s: QueryState, ctx: QueryContext) -> dict:
@@ -169,10 +186,17 @@ class QueryPipeline:
         """用重排模型给候选打分，按阈值和断崖截断选出最终资料，并推送来源卡片。"""
         ctx.emit("progress", {"stage": "rerank", "message": "正在整理检索结果…"})
         items = s["merged"]
-        scores = self.models.rerank(s["rewritten_query"], [ranking.rerank_text(x) for x in items])
+        try:
+            scores = self.models.rerank(s["rewritten_query"], [ranking.rerank_text(x) for x in items])
+        except Exception as e:  # noqa: BLE001 —— 重排失败时按 RRF 名次继续作答，不让整条问答失败
+            logger.warning("重排失败，按 RRF 顺序选取资料：%s", e)
+            scores = [0.0] * len(items)   # 分数相同，排序稳定，保持 RRF 顺序
         for x, sc in zip(items, scores):
             x["rerank"] = sc
-        selected = ranking.cut_by_score(items, self.rerank_min_score)
+        # 按题号精确命中的题目是用户点名要的，排在最前且不受阈值影响；其余按阈值和断崖截断
+        exact = [x for x in items if x.get("exact_match")]
+        rest = ranking.cut_by_score([x for x in items if not x.get("exact_match")], self.rerank_min_score)
+        selected = (exact + rest)[:ranking.MAX_SELECTED]
         logger.info("重排：候选 %d → 选中 %d，分数 %s", len(items), len(selected),
                     [round(x["rerank"], 2) for x in selected])
         sources = [ranking.to_source(i, x) for i, x in enumerate(selected, 1)]

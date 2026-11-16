@@ -15,6 +15,23 @@ SNIPPET_LEN = 200   # 来源卡片摘要的最大长度
 
 # ---------------- 改写 ----------------
 
+_NULLS = {"null", "none", "nil", "n/a", "无"}
+_RE_QUESTION_CODE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_]*_bank_q\d+(?![A-Za-z0-9_])")   # 题号，如 xxx_bank_q021
+
+
+def _str_list(v) -> list[str]:
+    """把模型返回的「列表」字段规整为字符串列表：单个字符串视为一个元素，其他非列表类型视为空。"""
+    if isinstance(v, str):
+        v = [v]
+    if not isinstance(v, list):
+        return []
+    return [x.strip() for x in v if isinstance(x, str) and x.strip() and x.strip().lower() not in _NULLS]
+
+
+def find_question_codes(text: str, limit: int = 10) -> list[str]:
+    """从问题中提取题号（去重、保持顺序），供标量精确查询。"""
+    return list(dict.fromkeys(m.group(0).lower() for m in _RE_QUESTION_CODE.finditer(text or "")))[:limit]
+
 def parse_rewrite(raw: str, fallback_query: str) -> dict:
     """解析改写节点的 JSON 输出；格式不对时退回原问题、不加过滤（不能因为改写失败影响问答）。"""
     # 模型偶尔会在 JSON 前后加说明文字，只取第一个 { 到最后一个 } 之间的内容
@@ -23,11 +40,19 @@ def parse_rewrite(raw: str, fallback_query: str) -> dict:
         data = json.loads(m.group(0)) if m else {}
     except json.JSONDecodeError:
         data = {}
-    q = str(data.get("rewritten_query") or "").strip() or fallback_query
+    if not isinstance(data, dict):
+        data = {}
+    # 模型的输出不可信：每个字段都校验类型，字符串 "null"/"None" 视为空
+    q = data.get("rewritten_query")
+    q = q.strip() if isinstance(q, str) else ""
+    if q.lower() in _NULLS:
+        q = ""
+    q = q or fallback_query
+    raw_cts, raw_qts = _str_list(data.get("content_types")), _str_list(data.get("question_types"))
     # 只保留合法取值，防止模型编造类型导致过滤后查不到任何结果
-    cts = [c for c in data.get("content_types") or [] if c in CONTENT_TYPES]
-    qts = [t for t in data.get("question_types") or [] if t in QUESTION_TYPES]
-    if "选择题" in (data.get("question_types") or []):        # PRD F4-4
+    cts = list(dict.fromkeys(c for c in raw_cts if c in CONTENT_TYPES))
+    qts = list(dict.fromkeys(t for t in raw_qts if t in QUESTION_TYPES))
+    if "选择题" in raw_qts:        # PRD F4-4
         qts = sorted(set(qts) | {"单选题", "多选题"}, key=QUESTION_TYPES.index)
     # 指定了题型就一定是在找题目
     if qts and "question" not in cts:
@@ -92,7 +117,10 @@ def _gap_cut(ranked: list[dict], min_k: int, gap_ratio: float, gap_abs: float) -
     return ranked
 
 
-def cut_by_score(items: list[dict], min_score: float, max_k: int = 8, min_k: int = 3,
+MAX_SELECTED = 8    # 进入上下文的资料条数上限
+
+
+def cut_by_score(items: list[dict], min_score: float, max_k: int = MAX_SELECTED, min_k: int = 3,
                  gap_ratio: float = 0.25, gap_abs: float = 0.5) -> list[dict]:
     """先按相关性阈值过滤；知识库结果排在网络结果之前（M4 确认的策略），两组各自做断崖截断，合计最多 max_k 个。
 
@@ -112,8 +140,12 @@ def needs_web(content_types: list[str]) -> bool:
     return not (content_types and set(content_types) <= INTERNAL_ONLY_TYPES)
 
 
-def rerank_text(item: dict, limit: int = 1500) -> str:
-    """给重排模型打分用的文本：网络结果用标题 + 摘要，知识库结果在正文前加上所属课程 / 项目 / 题库和章节。"""
+def rerank_text(item: dict, limit: int = 6000) -> str:
+    """给重排模型打分用的文本：网络结果用标题 + 摘要，知识库结果在正文前加上所属课程 / 项目 / 题库和章节。
+
+    第一行固定是「所属 + 章节」：超过 512 token 的文本，重排时会再用「第一行 + 正文尾部」打一次分（见 LocalModels.rerank）。
+    limit 只防止极端长文本，正常切片不会被它截断。
+    """
     if item.get("url") and not item.get("chunk_id"):
         return f"{item.get('title', '')}\n{item.get('snippet', '')}"[:limit]
     head = " ".join(x for x in (item.get("course_name") or item.get("project_name") or item.get("bank_name"),
@@ -163,21 +195,27 @@ def source_label(item: dict) -> str:
     return " · ".join(parts)
 
 
+TRUNCATED_MARK = "\n…（该资料过长，已截断）"
+
+
 def build_context(items: list[dict], max_chars: int = 12000) -> str:
-    """把选中的资料拼成带编号的参考资料文本，总长度不超过 max_chars（超出部分截断）。
+    """把选中的资料拼成带编号的参考资料文本，总长度不超过 max_chars。
 
     编号 [n] 与来源卡片的编号一致，模型在答案中用 [n] 引用。
+    按顺序公平分配长度：每条最多用「剩余额度 ÷ 剩余条数」，短资料用不完的额度留给后面的资料。
+    这样一条超长资料（如上万字的代码块）不会挤掉其他资料，每张来源卡片都能在上下文中找到对应内容。
     """
     sep = "\n\n"
-    blocks, used = [], 0
+    blocks: list[str] = []
+    remaining = max_chars - len(sep) * max(0, len(items) - 1)   # 分隔符也计入长度上限
     for i, it in enumerate(items, 1):
         body = it.get("snippet", "") if (it.get("url") and not it.get("chunk_id")) else it.get("content", "")
         block = f"[{i}] 来源：{source_label(it)}\n{body}"
-        room = max_chars - used - (len(sep) if blocks else 0)   # 分隔符也计入长度上限
-        if room <= 0:
-            break
-        blocks.append(block[:room])
-        used += len(blocks[-1]) + (len(sep) if len(blocks) > 1 else 0)
+        share = remaining // (len(items) - i + 1)
+        if len(block) > share:
+            block = block[:max(0, share - len(TRUNCATED_MARK))] + TRUNCATED_MARK
+        blocks.append(block)
+        remaining -= len(block)
     return sep.join(blocks)
 
 

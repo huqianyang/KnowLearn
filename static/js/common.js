@@ -30,6 +30,11 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+/** 是否为 http(s) 地址。拼进 href / src 前必须检查：esc 只转义字符，挡不住 javascript: 等协议。 */
+function isHttpUrl(u) {
+  return typeof u === 'string' && /^https?:\/\//i.test(u.trim());
+}
+
 let toastTimer = null;
 /** 页面顶部的轻提示，2 秒后自动消失；isError 为 true 时显示为红色。 */
 function toast(msg, isError = false) {
