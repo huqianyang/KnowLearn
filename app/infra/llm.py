@@ -95,10 +95,16 @@ class LlmClient:
                                                 temperature=temperature, **kwargs)
         return (r.choices[0].message.content or "").strip()
 
-    def stream(self, messages: list[dict], max_tokens: int = 2000, temperature: float = 0.3):
-        """逐段产出文本。调用方可随时停止迭代（流式中断）。"""
+    def stream(self, messages: list[dict], max_tokens: int = 2000, temperature: float = 0.3,
+               thinking: bool | None = None):
+        """逐段产出文本。调用方可随时停止迭代（流式中断）。
+
+        thinking：是否开启思考模式；None 时不传参数，使用模型默认（DeepSeek-V4-Flash 默认开启）。
+        思考内容不推送给用户，但会推迟第一个字出现的时间。
+        """
+        kwargs: dict = {} if thinking is None else {"extra_body": {"enable_thinking": thinking}}
         resp = self.client.chat.completions.create(model=self.llm_model, messages=messages, max_tokens=max_tokens,
-                                                   temperature=temperature, stream=True)
+                                                   temperature=temperature, stream=True, **kwargs)
         try:
             for ev in resp:
                 # 部分事件没有 choices 或内容为空（如结束事件），跳过

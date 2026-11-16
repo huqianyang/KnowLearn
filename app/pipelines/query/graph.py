@@ -69,12 +69,14 @@ class QueryPipeline:
         llm: 大模型客户端。
         web: 联网搜索客户端。
         rerank_min_score: 重排相关性阈值，低于该分数的候选丢弃。
+        answer_thinking: 生成答案时是否开启思考模式；None 表示使用模型默认。
     """
 
     def __init__(self, models: LocalModels, vectors: VectorStore, llm: LlmClient, web: WebSearchClient,
-                 rerank_min_score: float):
+                 rerank_min_score: float, answer_thinking: bool | None = None):
         self.models, self.vectors, self.llm, self.web = models, vectors, llm, web
         self.rerank_min_score = rerank_min_score
+        self.answer_thinking = answer_thinking
 
     def run(self, query: str, history: list[dict], ctx: QueryContext) -> QueryState:
         """执行一次问答，返回最终状态（含答案、来源、图片）。
@@ -221,7 +223,7 @@ class QueryPipeline:
         messages.append({"role": "user", "content": ANSWER_USER.format(context=context, query=s["query"])})
         parts: list[str] = []
         t0 = time.time()
-        for delta in self.llm.stream(messages):
+        for delta in self.llm.stream(messages, thinking=self.answer_thinking):
             if ctx.cancel.is_set():
                 break
             if not parts:

@@ -25,7 +25,14 @@ class Settings(BaseSettings):
     temp_dir: Path = PROJECT_ROOT / "temp_data"     # 导入过程中的临时文件目录
     max_upload_mb: int = 50                         # 单个上传文件的大小上限（MB）
     history_rounds: int = 3            # 多轮对话带入的历史轮数（数据库设计 DB2）
-    rerank_min_score: float = -3.0     # 重排相关性阈值（bge-reranker 原始分数）。M4 实测：相关内容约 -0.6～-2.5，不相关多低于 -3
+    # 重排相关性阈值（bge-reranker 原始分数），低于它的候选不进入上下文；全部低于它时回答「未找到相关资料」。
+    # 2026-11-16 由 -3.0 调到 -2.0：scripts/retrieval_eval.py（21 正例 / 26 负例）中正例最高分最低 -0.51，
+    # 无答案题被判有资料 9/26 → 2/26；历史 128 次问答中没有一次「最高分低于 -2.0」，-2～-3 的只是排在末尾的补充资料
+    rerank_min_score: float = -2.0
+    # 生成答案时是否开启模型的思考模式（改写和 HyDE 固定关闭）。思考内容不展示，但会推迟首字出现。
+    # 2026-11-16 对比 15 道评测题：关闭后生成首字中位数 2.1s → 0.6s、生成总时长 5.0s → 3.3s，
+    # 答案长度、引用数、正确性无明显差别，因此默认关闭
+    answer_thinking: bool = False
 
     # ---- 硅基流动 ----
     siliconflow_api_key: str = Field(min_length=1)

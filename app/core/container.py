@@ -60,7 +60,7 @@ class Container:
         # 会话与问答
         sessions = SessionService(mongo)
         web = WebSearchClient(s.web_search_mcp_url, s.dashscope_api_key)
-        chat = ChatService(sessions, QueryPipeline(models, vectors, llm, web, s.rerank_min_score), s.history_rounds)
+        chat = ChatService(sessions, QueryPipeline(models, vectors, llm, web, s.rerank_min_score, s.answer_thinking), s.history_rounds)
         return cls(s, mongo, storage, vectors, models, llm, mineru, worker, service, sessions, chat)
 
     def startup(self) -> None:
