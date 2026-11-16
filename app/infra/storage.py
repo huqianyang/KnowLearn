@@ -66,11 +66,11 @@ class Storage:
         """对象的公开访问地址；对象名中的中文、空格等做 URL 编码。"""
         return build_public_url(self.public_base, self.bucket, object_key)
 
+    def ping(self) -> None:
+        """连通性检查，失败时抛出异常。"""
+        self.client.bucket_exists(self.bucket)
+
 
 def build_public_url(public_base: str, bucket: str, object_key: str) -> str:
     """拼公开访问地址。注意中文按 %XX 编码后每个汉字占 9 字节（上传前据此校验文件名长度）。"""
     return f"{public_base.rstrip('/')}/{bucket}/{quote(object_key)}"
-
-    def ping(self) -> None:
-        """连通性检查，失败时抛出异常。"""
-        self.client.bucket_exists(self.bucket)

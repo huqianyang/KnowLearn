@@ -28,6 +28,21 @@ def _str_list(v) -> list[str]:
     return [x.strip() for x in v if isinstance(x, str) and x.strip() and x.strip().lower() not in _NULLS]
 
 
+# 改写失败时的兜底路由：只认很明确的说法（审计 B3：实测改写超时后，「通用编程项目班的详情」因类型为空而去联网）
+_RE_COURSE_HINT = re.compile(r"课程|(入门|项目|强化|基础|进阶|冲刺|提升|通关|专项)班|训练营|先修|课时|学时")
+_RE_QUESTION_HINT = re.compile(r"选择题|[单多]选题|判断题|简答题|编程题|计算题|练习题|题目|题库|_bank_q\d+")
+
+
+def guess_content_types(query: str) -> list[str]:
+    """改写失败时，按关键词判断是否在问课程或找题目（决定是否联网）；判断不出时返回空（不限）。"""
+    out = []
+    if _RE_COURSE_HINT.search(query or ""):
+        out.append("course_intro")
+    if _RE_QUESTION_HINT.search(query or ""):
+        out.append("question")
+    return out
+
+
 def find_question_codes(text: str, limit: int = 10) -> list[str]:
     """从问题中提取题号（去重、保持顺序），供标量精确查询。"""
     return list(dict.fromkeys(m.group(0).lower() for m in _RE_QUESTION_CODE.finditer(text or "")))[:limit]

@@ -129,6 +129,32 @@ def test_query_survives_malformed_rewrite():
     assert p.run("问题", [], QueryContext(emit=lambda e, d: None))["answer"] == "答案[1]"
 
 
+@pytest.mark.parametrize("q,expect", [
+    ("通用编程项目班的详情", ["course_intro"]), ("班组长带人训练营适合什么年级", ["course_intro"]),
+    ("查询函数相关的选择题", ["question"]), ("x_bank_q004 的答案", ["question"]),
+    ("Git 怎么撤销上一次提交", []), ("最新版本的 Python 有什么新特性", []),
+])
+def test_guess_content_types(q, expect):
+    """改写失败时的关键词兜底：只认明确的课程 / 题目说法，其他问题不限类型。"""
+    assert ranking.guess_content_types(q) == expect
+
+
+def test_rewrite_failure_routes_course_question_away_from_web():
+    """改写超时时，课程类问题按关键词判为课程介绍，不去联网（审计 B3 在真实服务上复现过）。"""
+    p, _ = _pipeline()
+    web_calls = []
+    p.web = types.SimpleNamespace(search=lambda q, n: web_calls.append(q) or [])
+
+    def timeout(msgs, json_mode=False, **kw):
+        if json_mode:
+            raise TimeoutError("Request timed out.")
+        return "假设答案"
+
+    p.llm = types.SimpleNamespace(complete=timeout, stream=lambda msgs, **kw: iter(["答案"]))
+    st = p.run("通用编程项目班的详情", [], QueryContext(emit=lambda e, d: None))
+    assert st["content_types"] == ["course_intro"] and web_calls == []
+
+
 def test_question_code_exact_lookup_ranks_first():
     """问题中带题号时，按题号精确查到的题目排在知识库结果最前面。"""
     q = {"chunk_id": "q21", "content_type": "question", "content": "count_vowels", "question_code": "x_bank_q021",
@@ -299,6 +325,19 @@ def test_store_rejects_overlong_file_name_with_readable_error():
     with pytest.raises(ImportFailed, match="file_name"):
         p._node_store(s)
     assert p.d.vectors.rows == []
+
+
+# ---------------- 健康检查依赖的方法 ----------------
+
+def test_infra_clients_expose_health_methods():
+    """健康检查和关闭流程调用的方法必须存在（曾因编辑把 Storage.ping 挤出类，导致健康检查 500）。"""
+    from app.infra.mongo import Mongo
+    from app.infra.storage import Storage
+    from app.infra.vector_store import VectorStore
+
+    for cls, names in [(Storage, ["ping", "public_url"]), (VectorStore, ["ping", "close"]), (Mongo, ["ping", "close"])]:
+        for n in names:
+            assert callable(getattr(cls, n, None)), f"{cls.__name__}.{n} 不存在"
 
 
 # ---------------- A2：临时目录清理 ----------------

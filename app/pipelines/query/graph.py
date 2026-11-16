@@ -126,6 +126,11 @@ class QueryPipeline:
         except Exception:  # noqa: BLE001 —— parse_rewrite 已做类型校验，这里兜底保证问答不中断
             logger.exception("改写结果解析异常，使用原问题")
             r = {"rewritten_query": s["query"], "content_types": [], "question_types": []}
+        if "{" not in raw and not r["content_types"]:
+            # 改写失败（超时、报错、没有返回 JSON）：按关键词兜底判断类型，避免课程 / 题目类问题去联网
+            r["content_types"] = ranking.guess_content_types(s["query"])
+            if r["content_types"]:
+                logger.info("改写失败，按关键词判断类型=%s", r["content_types"])
         logger.info("改写：%s → %s | 类型=%s 题型=%s", s["query"], r["rewritten_query"], r["content_types"], r["question_types"])
         ctx.emit("progress", {"stage": "retrieve", "message": "正在检索知识库和网络…"})
         return r

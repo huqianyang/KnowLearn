@@ -55,15 +55,18 @@ def check(q: dict, r: dict, timings: dict) -> dict:
     """按评测题的预期检查结果。
 
     - type_ok：第一条知识库来源的内容类型在 expect_types 中；
-    - text_ok：答案或来源中包含 expect_text 的每一项（不区分大小写）；
+    - text_ok：答案或来源中包含 expect_text 的每一项，且包含 expect_any 中的至少一项（不区分大小写）。
+      expect_any 用于「答对的写法不止一种」的题，例如符合条件的题目有好几道，命中任意一道都算对；
     - web_ok：标了 no_web 的题没有网络来源；
     - cited：答案中有 [1] 引用（只记录，不计入通过）。
     """
     types = [s.get("content_type") for s in r["sources"] if s["source_type"] == "kb"]
-    hay = r["content"] + json.dumps(r["sources"], ensure_ascii=False)
+    hay = (r["content"] + json.dumps(r["sources"], ensure_ascii=False)).lower()
+    any_of = q.get("expect_any") or []
     return {
         "type_ok": bool(types) and types[0] in q["expect_types"],
-        "text_ok": all(t.lower() in hay.lower() for t in q.get("expect_text", [])),
+        "text_ok": all(t.lower() in hay for t in q.get("expect_text", []))
+        and (not any_of or any(t.lower() in hay for t in any_of)),
         "web_ok": not (q.get("no_web") and any(s["source_type"] == "web" for s in r["sources"])),
         "cited": "[1]" in r["content"],
         "timings": timings,
